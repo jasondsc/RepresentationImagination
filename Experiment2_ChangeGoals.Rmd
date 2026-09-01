@@ -1,0 +1,922 @@
+---
+title: "ChangeGoalsVGC"
+output: html_document
+date: "2026-03-04"
+---
+
+
+``` {r helpful functions and libraries}
+
+library(dplyr)
+library(ggplot2)
+# function that takes in json inputs and converts to matrix for simple math
+json2matrix <- function(mazeA){
+  m=t(matrix(unlist(strsplit(mazeA, split='')), nrow = 11))
+  return(m)
+}
+
+# function to compute manhattan distance between all pairs of obstacles 
+obstacle_distances <- function(mazeA){
+  number_obs= length(unique(as.numeric(mazeA)))-1
+  max_obs= max(as.numeric(mazeA), na.rm = TRUE)
+  min_obs= min(as.numeric(mazeA), na.rm = TRUE)
+  mazeA[mazeA=='G']=NaN
+  mazeA[mazeA=='S']=NaN
+  mazeA[mazeA=='.']=NaN
+  mazeA[mazeA=='#']=NaN
+  
+  obstacle_distances_output= matrix(, nrow=number_obs*number_obs, 3)
+  obstacle_distances_output[,1] = rep(seq(min_obs,max_obs), each=6)
+  obstacle_distances_output[,2] = rep(seq(min_obs,max_obs), 6)
+  
+  output=c()
+  for (i in min_obs:max_obs){
+    for (j in min_obs:max_obs){
+      obs1=which(mazeA== as.character(i))
+      obs1x= obs1 %% 11
+      obs1x[obs1x==0] =11
+      obs1y= ceiling(obs1/11)
+      obs2= which(mazeA== as.character(j))
+      obs2x= obs2 %% 11
+      obs2x[obs2x==0] =11
+      obs2y= ceiling(obs2/11)
+      
+      distance =c()
+      for (obsA in 1:length(obs1x)){
+        for (obsB in 1:length(obs2x)){
+          distance= c(distance, abs(obs1x[obsA]-obs2x[obsB]) + abs(obs1y[obsA]-obs2y[obsB]))
+        }
+      }
+      
+      output= c(output,min(distance))
+    }
+  }
+  obstacle_distances_output[,3]=output
+  return(obstacle_distances_output)
+}
+
+# load in libraries
+library(dplyr)
+library(lme4)
+library(ggplot2)
+
+```
+
+
+
+```{r read in behav data, clean it, & plot hist of aware reports}
+
+library(dplyr)
+library(ggplot2)
+data= read.csv('~/Documents/ChangingGoals/CompiledData.csv', na.strings = 'NaN')
+
+colnames(data)[1] = 'Subject.Code'
+data= data[!is.na(data$MazeID),]
+data$timedOut= data$Solution.RT > 20 # find trials where people took very long to answer
+
+tt=data %>% group_by(Subject.Code) %>% summarise(meanAge= mean(Age))
+
+MazeRTstats=data %>% group_by(MazeID, ChangeVGC, LargeChange) %>% summarise(meanRT= mean(Solution.RT), SDRT= sd(Solution.RT))
+
+temp=data %>% group_by(Subject.Code) %>% summarise(minAware= min(Aware.ReportObs), maxAware= max(Aware.ReportObs), sdAware= sd(Aware.ReportObs))
+# all subject seem to use the entirety of the scale
+
+maze_stats= read.csv('~/Documents/ChangingGoals/mazes/OriginalMazeStats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+dictionary_of_maze=unique(data$MazeID)
+dictionary_of_maze= dictionary_of_maze[order(dictionary_of_maze)]
+index_mazes=paste(data$MazeID[data$ChangeVGC ==0])
+
+# add lateralization effects to main data frame
+data$lateralized_values_dVGC[data$ChangeVGC ==0]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$lateralized_values_sVGC[data$ChangeVGC ==0]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$lateralized_values_sVGC_signed[data$ChangeVGC ==0]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+
+data$OptimalMoves[data$ChangeVGC ==0 ] = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1,72,6)]))
+
+index_mazes=paste(data$MazeID[data$ChangeVGC ==0], data$Obs.No[data$ChangeVGC ==0])
+dictionary_of_maze=paste(rep(sort(unique(data$MazeID)), each=6), rep(unique(data$Obs.No), 12))
+data$JIT[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JIT))
+data$VGC_prior[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPrior))
+data$RandomForget[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC))
+data$TargetedForget[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$TargetForgetsVGC))
+
+data$SpatialsVGC[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC))
+data$SpatialsVGC010[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC010))
+data$SpatialsVGC025[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC025))
+data$SpatialsVGC033[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC033))
+data$SpatialsVGC040[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC040))
+
+data$RandomForget010[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC010))
+data$RandomForget025[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC025))
+data$RandomForget033[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC033))
+data$RandomForget040[data$ChangeVGC ==0 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC040))
+
+
+# original lateralization 
+maze_stats= read.csv('~/Documents/ChangingGoals/mazes/OriginalMazeStats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+dictionary_of_maze=unique(data$MazeID)
+dictionary_of_maze= dictionary_of_maze[order(dictionary_of_maze)]
+index_mazes=paste(data$MazeID)
+
+# add lateralization effects to main data frame
+data$orig_lateralized_values_dVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$orig_lateralized_values_sVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$orig_lateralized_values_sVGC_signed=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+
+
+
+maze_stats= read.csv('~/Documents/ChangingGoals/mazes/OriginalMazeStats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+dictionary_of_maze=unique(data$MazeID)
+dictionary_of_maze= dictionary_of_maze[order(dictionary_of_maze)]
+index_mazes=paste(data$MazeID[data$Inversion ==1])
+
+# add lateralization effects to main data frame
+data$lateralized_values_dVGC[data$Inversion ==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$lateralized_values_sVGC[data$Inversion ==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$lateralized_values_sVGC_signed[data$Inversion ==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+
+data$OptimalMoves[data$Inversion ==1] = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1,72,6)]))
+
+index_mazes=paste(data$MazeID[data$Inversion ==1], data$Obs.No[data$Inversion ==1])
+dictionary_of_maze=paste(rep(sort(unique(data$MazeID)), each=6), rep(unique(data$Obs.No), 12))
+data$JIT[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JIT))
+
+data$JIT[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JIT))
+data$VGC_prior[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPrior))
+data$RandomForget[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC))
+data$TargetedForget[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$TargetForgetsVGC))
+
+data$SpatialsVGC[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC))
+data$SpatialsVGC010[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC010))
+data$SpatialsVGC025[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC025))
+data$SpatialsVGC033[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC033))
+data$SpatialsVGC040[data$Inversion ==1 ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC040))
+
+data$RandomForget010[data$Inversion ==1  ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC010))
+data$RandomForget025[data$Inversion ==1  ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC025))
+data$RandomForget033[data$Inversion ==1  ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC033))
+data$RandomForget040[data$Inversion ==1  ]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC040))
+
+# now let us repeat for small changes 
+maze_stats= read.csv('~/Documents/ChangingGoals/mazes/NewGoalSmallMazeStats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+dictionary_of_maze=unique(data$MazeID)
+dictionary_of_maze= dictionary_of_maze[order(dictionary_of_maze)]
+index_mazes=paste(data$MazeID[data$ChangeVGC ==1 & data$SmallChange==1])
+
+# add lateralization effects to main data frame
+data$lateralized_values_dVGC[data$ChangeVGC ==1 & data$SmallChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$lateralized_values_sVGC[data$ChangeVGC ==1 & data$SmallChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$lateralized_values_sVGC_signed[data$ChangeVGC ==1 & data$SmallChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+
+data$OptimalMoves[data$ChangeVGC ==1 & data$SmallChange==1] = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1,72,6)]))
+
+data$OptimalMoves[data$ChangeVGC ==1 & data$SmallChange==1] = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1,72,6)]))
+
+
+index_mazes=paste(data$MazeID[data$ChangeVGC ==1 & data$SmallChange==1], data$Obs.No[data$ChangeVGC ==1 & data$SmallChange==1])
+dictionary_of_maze=paste(rep(sort(unique(data$MazeID)), each=6), rep(unique(data$Obs.No), 12))
+data$JIT[data$ChangeVGC ==1 & data$SmallChange==1]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JIT))
+
+data$VGC_prior[data$ChangeVGC ==1 & data$SmallChange==1]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPrior))
+
+# now let us repeat for small changes 
+maze_stats= read.csv('~/Documents/ChangingGoals/mazes/NewGoalLargelMazeStats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+dictionary_of_maze=unique(data$MazeID)
+dictionary_of_maze= dictionary_of_maze[order(dictionary_of_maze)]
+index_mazes=paste(data$MazeID[data$ChangeVGC ==1 & data$LargeChange==1])
+
+# add lateralization effects to main data frame
+data$lateralized_values_dVGC[data$ChangeVGC ==1 & data$LargeChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$lateralized_values_sVGC[data$ChangeVGC ==1 & data$LargeChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$lateralized_values_sVGC_signed[data$ChangeVGC ==1 & data$LargeChange==1]=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+
+data$OptimalMoves[data$ChangeVGC ==1 & data$LargeChange==1] = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1,72,6)]))
+
+
+index_mazes=paste(data$MazeID[data$ChangeVGC ==1 & data$LargeChange==1], data$Obs.No[data$ChangeVGC ==1 & data$LargeChange==1])
+dictionary_of_maze=paste(rep(sort(unique(data$MazeID)), each=6), rep(unique(data$Obs.No), 12))
+data$JIT[data$ChangeVGC ==1 & data$LargeChange==1]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JIT))
+
+data$VGC_prior[data$ChangeVGC ==1 & data$LargeChange==1]= as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPrior))
+
+
+
+# let use remove trials where people did not solve the maze in 20 seconds and where they deviated from the instructions (AKA did not have an optimal solution)
+
+# we remove trials where subjects took more than 9 extra moves 
+data$deltaMove=0
+data$deltaMove= data$Moves+1 - data$OptimalMoves
+hist(data$deltaMove)
+
+tt=data %>% group_by(ChangeVGC, Inversion, LargeChange) %>% summarise(meanMove= mean(deltaMove), sdMove= sd(deltaMove), meanRT = mean(Solution.RT), sdRT= sd(Solution.RT), meanbump= mean(bumps), sdbump= sd(bumps))
+
+
+#remap the awareness reports of each subject 
+data$Aware.ReportObs.scaled= plyr::mapvalues(data$Aware.ReportObs, c(1,2,3,4,5,6,7,8,9), c(0,0.125,0.25,0.375,0.5,0.625,0.75,0.875,1))
+data= data %>% group_by(Subject.Code) %>% mutate(Aware.ReportObs.zscore = (Aware.ReportObs.scaled- mean(Aware.ReportObs.scaled))/sd(Aware.ReportObs.scaled))
+
+# binarize the obstacles for plotting purpose to remake Figure 3a of Ho et al 
+data$binarysVGC= data$sVGC.Obs.M1 > 0.5
+data$binarysVGC= plyr::mapvalues(data$binarysVGC, c(1,0), c('relevant', 'irrelevant'))
+
+
+data4plot = data %>% group_by(Subject.Code, binarysVGC, ChangeVGC, Inversion, LargeChange, MazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Conditions= paste(data4plot$ChangeVGC, data4plot$Inversion, data4plot$LargeChange)
+
+
+
+ggplot(data4plot[data4plot$ChangeVGC ==0,], aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) 
+  
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~ChangeVGC)
+
+ggsave('~/Documents/ChangingGoals/figures/ChangeGoals_hist_first_rep.pdf', device = "pdf", width= 8, height =5)
+
+
+data4plot$Conditions = plyr::mapvalues(data4plot$Conditions, c("0 0 0", "1 0 0", "1 0 1", "1 1 0"), c("no change", "small change", "large change", "inversion"))
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Conditions)
+
+ggsave('~/Documents/ChangingGoals/figures/ChangeGoals_allConditions_hist_1strep.pdf', device = "pdf", width= 8, height =5)
+
+
+
+data$binarysVGC= data$sVGC.Obs.M2 > 0.5
+data$binarysVGC= plyr::mapvalues(data$binarysVGC, c(1,0), c('relevant', 'irrelevant'))
+
+data4plot = data %>% group_by(Subject.Code, binarysVGC, ChangeVGC, Inversion, LargeChange, MazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Conditions= paste(data4plot$ChangeVGC, data4plot$Inversion, data4plot$LargeChange)
+
+
+data4plot$Conditions = plyr::mapvalues(data4plot$Conditions, c("0 0 0", "1 0 0", "1 0 1", "1 1 0"), factor(c("1.no change", "3.small change", "4.large change", "2.inversion")))
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_density(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Conditions)
+
+ggsave('~/Documents/ChangingGoals/figures/ChangeGoals_allConditions_hist2ndRep.pdf', device = "pdf", width= 12, height =5)
+
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_density(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Conditions, nrow=1)
+
+ggsave('~/Documents/ChangingGoals/figures/ChangeGoals_allConditions_hist2ndRep.pdf', device = "pdf", width= 12, height =5)
+
+
+
+data$binarysVGC= 0.5*(data$sVGC.Obs.M2 + data$sVGC.Obs.M1)  > 0.5
+data$binarysVGC= plyr::mapvalues(data$binarysVGC, c(1,0), c('relevant', 'irrelevant'))
+
+data4plot = data %>% group_by(Subject.Code, binarysVGC, ChangeVGC, Inversion, LargeChange, MazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Conditions= paste(data4plot$ChangeVGC, data4plot$Inversion, data4plot$LargeChange)
+
+
+data4plot$Conditions = plyr::mapvalues(data4plot$Conditions, c("0 0 0", "1 0 0", "1 0 1", "1 1 0"), c("no change", "small change", "large change", "inversion"))
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Conditions)
+
+ggsave('~/Documents/ChangingGoals/figures/ChangeGoals_allConditions_hist_mean_of_representations.pdf', device = "pdf", width= 8, height =5)
+
+
+
+```
+
+
+```{r Performance metrics}
+# clean data 
+data$Move_delta = data$Moves - data$OptimalMoves
+#data= data[data$Move_delta < 9,]
+
+detect_outliers = function(x, n=3){
+  x_mean = mean(x, na.rm=TRUE)
+  x_sd = sd(x, na.rm=TRUE)
+  lower = x_mean - n*x_sd
+  upper = x_mean + n*x_sd
+
+  return(!is.na(x) & (x<lower | x>upper))
+}
+
+data$RT_outlier = detect_outliers(data$Solution.RT, n=3)
+data$Move_outlier = detect_outliers(data$Move_delta, n=3)
+
+data$trial_excluded = data$RT_outlier | data$Move_outlier
+
+# Overall exclusion
+unique_trial_summary = data%>%
+  distinct(Subject.Code, Trial.Number, trial_excluded)
+
+# Subject exclusion
+subject_summary = unique_trial_summary %>%
+  group_by(Subject.Code) %>%
+  summarize(
+    total_trials = n(),
+    excluded_trials = sum(trial_excluded, na.rm = TRUE),
+    subject_pct_excluded = excluded_trials / total_trials,
+    .groups = "drop"
+  )
+
+avg_pct_excluded_per_subject = mean(subject_summary$subject_pct_excluded, na.rm = TRUE) * 100
+
+cat("This resulted in", round(avg_pct_excluded_per_subject, 2), "% of trials excluded on average per participant.\n")
+
+
+subjects_to_drop = subject_summary %>%
+  filter(subject_pct_excluded > 0.20) %>%
+  pull(Subject.Code)
+
+cat("Total numbers of subjects before exclusion:", length(unique(data$Subject.Code)), "\n")
+cat("Number of subjects excluded (>20% outliers):", length(subjects_to_drop), "\n")
+cat("Excluded subjects list:", paste(subjects_to_drop, collapse = ", "), "\n\n")
+
+data_clean_subjects = data %>%
+  filter(!Subject.Code %in% subjects_to_drop)
+
+final_data = data_clean_subjects %>%
+  filter(!trial_excluded)
+cat("Final row count of clean data for analysis:", nrow(final_data), "\n")
+
+
+
+data$Conditions= paste(data$ChangeVGC, data$Inversion, data$LargeChange)
+data$Conditions = plyr::mapvalues(data$Conditions, c("1 0 1", "1 1 0", "0 0 0", "1 0 0"), c("large change", "inversion", "no change", "small change"))
+
+# test for the sparesity of their representations 
+data$binaryAwareness = data$Aware.ReportObs.scaled > 0.5
+MazeAwarenessStats=data %>% group_by(Subject.Code, Trial.Number,MazeID, ChangeVGC, Inversion, LargeChange, Conditions) %>% summarise(obstaclesAwareness= sum(binaryAwareness))
+
+MazeAwarenessStats$obstaclesAwarenesszscore = scale(MazeAwarenessStats$obstaclesAwareness)[,1]
+
+
+sample1= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$ChangeVGC==0]
+sample2= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$Inversion==1]
+MKinfer::perm.t.test(sample1, sample2, R=1000)
+# t = -1.7776, df = 1633.5, p-value = 0.07565
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.25425482  0.01249658
+# sample estimates:
+# mean of x mean of y 
+#  2.633700  2.754579 
+
+sample1= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$ChangeVGC==0]
+sample2= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$Inversion==0]
+MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = -0.11911, df = 1461.2, p-value = 0.9052
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.1146199  0.1014965
+# sample estimates:
+# mean of x mean of y 
+#  2.633700  2.640261 
+
+
+sample1= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$ChangeVGC==0]
+sample2= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$Conditions == "small change"]
+MKinfer::perm.t.test(sample1, sample2, R=1000)
+
+# Results without permutation:
+# t = -0.057231, df = 1652.7, p-value = 0.9544
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.1361550  0.1284347
+# sample estimates:
+# mean of x mean of y 
+#   2.63370   2.63756 
+
+sample1= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$ChangeVGC==0]
+sample2= MazeAwarenessStats$obstaclesAwareness[MazeAwarenessStats$LargeChange==1]
+MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = -0.22827, df = 1583.9, p-value = 0.8195
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.1551579  0.1228091
+# sample estimates:
+# mean of x mean of y 
+#  2.633700  2.649874 
+
+
+
+data$Conditions = factor(data$Conditions, levels = c("no change", "inversion", "small change", "large change"))
+
+MazeAwarenessStats=data %>% group_by(Subject.Code,  Trial.Number, Conditions) %>% summarise(obstaclesAwareness= sd(Aware.ReportObs.scaled))
+
+MazeAwarenessStats= MazeAwarenessStats %>% group_by(Subject.Code, Conditions) %>% summarise(obstaclesAwareness= mean(obstaclesAwareness))
+
+output.summary = MazeAwarenessStats %>% group_by(Conditions) %>% summarise(obstaclesAwareness= mean(obstaclesAwareness))
+output.summary$Conditions = factor(output.summary$Conditions)
+output.summary$Subject.Code ='mean'
+
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# Plot the individuals
+ggplot(data=MazeAwarenessStats, aes(x=Conditions, y=obstaclesAwareness, color=Conditions, fill= Conditions))+ geom_line(aes(group=Subject.Code), colour= "grey", position = jitter_pos, linetype= 'twodash') + theme_classic() + xlab("") + geom_point(shape=21, color="white", size=5, position = jitter_pos) + ylab("mean sparsity of representation")  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') + stat_summary(data=MazeAwarenessStats, aes(x=Conditions, y=obstaclesAwareness), fun.data = mean_se, geom = "errorbar", size=2.5, width=0, color= "black") +  geom_point(data=output.summary, aes(x=Conditions, y=obstaclesAwareness),shape=21, color="white", fill= 'black', size=8) + geom_line(data=output.summary, aes(x=Conditions, y=obstaclesAwareness, group=Subject.Code), color="black", size=2) + scale_fill_manual(values=c('#024A70', '#E97D08', '#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/ChangingGoals/figures/AvgSizeofRepresentationSTD.pdf', device = "pdf", width= 5, height =5)
+
+
+
+
+# it seems like the representation of participants are equally sparse despite the change in goal
+MazeMovestats=data %>% group_by(Subject.Code, MazeID, Conditions, ChangeVGC, Inversion, LargeChange) %>% summarise(meanmove= mean(deltaMove))
+
+sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "large change"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = 1.3485, df = 891.12, p-value = 0.1779
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.09493671  0.51181561
+# sample estimates:
+# mean of x mean of y 
+#  2.648889  2.440449 
+ 
+ sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "small change"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+#  Results without permutation:
+# t = -0.48495, df = 898.85, p-value = 0.6278
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.3732259  0.2253274
+# sample estimates:
+# mean of x mean of y 
+#  2.648889  2.722838 
+ 
+sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "inversion"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = 4.3458, df = 879.25, p-value = 1.55e-05
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  0.3375156 0.8934471
+# sample estimates:
+# mean of x mean of y 
+#  2.648889  2.033408 
+ 
+
+MazeMovestats=data %>% group_by(Subject.Code, Conditions) %>% summarise(meanmove= mean(deltaMove))
+
+output.summary = MazeMovestats %>% group_by(Conditions) %>% summarise(meanmove= mean(meanmove))
+output.summary$Conditions = factor(output.summary$Conditions)
+output.summary$Subject.Code ='mean'
+
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# Plot the individuals
+ggplot(data=MazeMovestats, aes(x=Conditions, y=meanmove, color=Conditions, fill= Conditions))+ geom_line(aes(group=Subject.Code), colour= "grey", position = jitter_pos, linetype= 'twodash') + theme_classic() + xlab("") + geom_point(shape=21, color="white", size=5, position = jitter_pos) + ylab("mean delta moves")  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') + stat_summary(data=MazeMovestats, aes(x=Conditions, y=meanmove), fun.data = mean_se, geom = "errorbar", size=2.5, width=0, color= "black") +  geom_point(data=output.summary, aes(x=Conditions, y=meanmove),shape=21, color="white", fill= 'black', size=8) + geom_line(data=output.summary, aes(x=Conditions, y=meanmove, group=Subject.Code), color="black", size=2) + scale_fill_manual(values=c('#024A70', '#E97D08', '#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/ChangingGoals/figures/AvgDeltaMoves.pdf', device = "pdf", width= 5, height =5)
+
+ 
+ 
+
+
+
+MazeMovestats=data %>% group_by(Subject.Code, MazeID, Conditions, ChangeVGC, Inversion, LargeChange) %>% summarise(meanmove= mean(log10(Solution.RT)))
+
+sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "large change"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = -1.459, df = 892.79, p-value = 0.1449
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.032342024  0.004760512
+# sample estimates:
+# mean of x mean of y 
+# 0.8333292 0.8471199 
+ 
+ sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "small change"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+#  Results without permutation:
+# t = -0.92883, df = 898.99, p-value = 0.3532
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.02724945  0.00974247
+# sample estimates:
+# mean of x mean of y 
+# 0.8333292 0.8420827
+ 
+sample1= MazeMovestats$meanmove[MazeMovestats$Conditions == "no change" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$Conditions== "inversion"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = 0.81716, df = 31.951, p-value = 0.4199
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.9122972  2.1345194
+# sample estimates:
+# mean of x mean of y 
+#  2.972222  2.361111 
+ 
+
+
+MazeMovestats=data %>% group_by(Subject.Code, Conditions) %>% summarise(meanmove= median(Solution.RT))
+
+output.summary = MazeMovestats %>% group_by(Conditions) %>% summarise(meanmove= mean(meanmove))
+output.summary$Conditions = factor(output.summary$Conditions)
+output.summary$Subject.Code ='mean'
+
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# Plot the individuals
+ggplot(data=MazeMovestats, aes(x=Conditions, y=meanmove, color=Conditions, fill= Conditions))+ geom_line(aes(group=Subject.Code), colour= "grey", position = jitter_pos, linetype= 'twodash') + theme_classic() + xlab("") + geom_point(shape=21, color="white", size=5, position = jitter_pos) + ylab("median RTs")  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') + stat_summary(data=MazeMovestats, aes(x=Conditions, y=meanmove), fun.data = mean_se, geom = "errorbar", size=2.5, width=0, color= "black") +  geom_point(data=output.summary, aes(x=Conditions, y=meanmove),shape=21, color="white", fill= 'black', size=8) + geom_line(data=output.summary, aes(x=Conditions, y=meanmove, group=Subject.Code), color="black", size=2) + scale_fill_manual(values=c('#024A70', '#E97D08', '#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/ChangingGoals/figures/AvgLogRTs.pdf', device = "pdf", width= 5, height =5)
+
+ 
+
+# now let us compare obstacles which showed large change in sVGC
+# this allows us to make a fair comparison between number of bumps
+# this is because we can hold relevance constace for second goal
+# and look at how previous relevance (first goal) impacts 
+# how often you bump into the obstacle
+data$sVGCdelta = data$sVGC.Obs.M1- data$sVGC.Obs.M2
+
+mean(data$bumps[data$sVGCdelta < -0.45])
+mean(data$bumps[data$sVGCdelta > 0.45])
+mean(data$bumps[data$sVGCdelta == 0])
+
+table(data$sVGCdelta < -0.45, data$Conditions)
+table(data$sVGCdelta > 0.45, data$Conditions)
+table(abs(data$sVGCdelta) <0.1, data$Conditions)
+
+
+data$deltaVGCBinary[abs(data$sVGCdelta) <0.1 & data$sVGC.Obs.M1 > 0.49] = 'no change relevant'
+data$deltaVGCBinary[abs(data$sVGCdelta) <0.1 & data$sVGC.Obs.M1 < 0.49] = 'no change irrelevant'
+data$deltaVGCBinary[data$sVGCdelta > 0.45] = 'relevant to irrelevant'
+data$deltaVGCBinary[data$sVGCdelta < -0.45] = 'irrelevant to relevant'
+
+
+
+
+MazeMovestats=data[data$LargeChange==1,] %>% group_by(Subject.Code, deltaVGCBinary) %>% summarise(meanmove= mean(bumps), awareness= mean(Aware.ReportObs.scaled))
+
+sample1= MazeMovestats$meanmove[MazeMovestats$deltaVGCBinary == "no change relevant" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$deltaVGCBinary== "irrelevant to relevant"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = -5.4539, df = 74.353, p-value = 6.172e-07
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -1.8644990 -0.8667451
+# sample estimates:
+# mean of x mean of y 
+#  1.700855  3.066477 
+ 
+sample1= MazeMovestats$meanmove[MazeMovestats$deltaVGCBinary == "no change irrelevant" ]
+sample2= MazeMovestats$meanmove[MazeMovestats$deltaVGCBinary== "relevant to irrelevant"]
+ MKinfer::perm.t.test(sample1, sample2, R=1000)
+# Results without permutation:
+# t = 0.81716, df = 31.951, p-value = 0.4199
+# alternative hypothesis: true difference in means is not equal to 0
+# 95 percent confidence interval:
+#  -0.9122972  2.1345194
+# sample estimates:
+# mean of x mean of y 
+#  2.972222  2.361111 
+ 
+
+
+MazeMovestats=data[data$LargeChange==1,] %>% group_by(Subject.Code, deltaVGCBinary) %>% summarise(meanmove= mean(bumps), awareness= mean(Aware.ReportObs.scaled))
+
+output.summary = MazeMovestats %>% group_by(deltaVGCBinary) %>% summarise(meanmove= mean(meanmove))
+output.summary$deltaVGCBinary = factor(output.summary$deltaVGCBinary, levels = c("no change relevant", "irrelevant to relevant", "no change irrelevant", "relevant to irrelevant"))
+output.summary$Subject.Code ='mean'
+
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# Plot the individuals
+ggplot(data=MazeMovestats, aes(x=deltaVGCBinary, y=meanmove, color=deltaVGCBinary, fill= deltaVGCBinary))+ geom_line(aes(group=Subject.Code), colour= "grey", position = jitter_pos, linetype= 'twodash') + theme_classic() + xlab("") + geom_point(shape=21, color="white", size=5, position = jitter_pos) + ylab("mean bumps")  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') + stat_summary(data=MazeMovestats, aes(x=deltaVGCBinary, y=meanmove), fun.data = mean_se, geom = "errorbar", size=2.5, width=0, color= "black") +  geom_point(data=output.summary, aes(x=deltaVGCBinary, y=meanmove),shape=21, color="white", fill= 'black', size=8) + geom_line(data=output.summary, aes(x=deltaVGCBinary, y=meanmove, group=Subject.Code), color="black", size=2) + scale_fill_manual(values=c('#eb6234', '#ed9f85', '#858282', '#c9c7c7')) 
+
+ggsave('~/Documents/ChangingGoals/figures/AvgBumps.pdf', device = "pdf", width= 10, height =5)
+
+ 
+
+```
+
+
+
+
+
+```{r compute sVGC effects }
+
+data$MazeID_clean= factor(data$MazeID)
+
+data$sVGC.Obs.M1.zscore= scale(data$sVGC.Obs.M1)[,1]
+data$sVGC.Obs.M2.zscore= scale(data$sVGC.Obs.M2)[,1]
+data$lat_dVGC_scaled= scale(data$lateralized_values_dVGC)[,1]
+data$lat_sVGC_scaled= scale(data$lateralized_values_sVGC)[,1]
+data$Aware.ReportObs.zscore = scale(data$Aware.ReportObs.scaled)[,1]
+
+# check sVGC model fits in control condition (i.e., no change)
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.M1.zscore, data[data$Conditions %in% c("no change"),])
+sjPlot::tab_model(lm1)
+
+# does inverting goal impact mental reps?
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "inversion"),])
+sjPlot::tab_model(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC040),data[data$Conditions %in% c("no change", "inversion"),])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "small change"),])
+sjPlot::tab_model(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "large change"),])
+sjPlot::tab_model(lm2)
+
+lm0= lmer(scale(Aware.ReportObs) ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2),data[data$Conditions %in% c("large change"),])
+sjPlot::tab_model(lm0)
+
+lm1= lmer(scale(Aware.ReportObs) ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M1) + scale(sVGC.Obs.M2),data[data$Conditions %in% c("large change"),])
+sjPlot::tab_model(lm1)
+
+BIC(lm1)-BIC(lm0) # 8.761689
+
+
+data$binarysVGCM1 = data$sVGC.Obs.M1 > 0.5
+# summarize by maze 
+data_plot= data %>% filter(LargeChange ==1) %>% group_by(MazeID_clean, Obs.No) %>% summarise(mean_awareness= mean(Aware.ReportObs.scaled), mean_sVGC= mean(sVGC.Obs.M1), mean_sVGCM2= mean(sVGC.Obs.M2),binarysVGCM1= mean(binarysVGCM1))
+
+data_plot$binarysVGCM1 = plyr::mapvalues(data_plot$binarysVGCM1, c(0,1), c('irrelevant', 'relevant'))
+
+ggplot(data_plot, aes(x=mean_sVGCM2, y= mean_awareness))+  geom_jitter(aes(color=binarysVGCM1, fill= binarysVGCM1), size=3, width = 0.05) + theme_classic() + xlab("") +  ylab("awareness reports") + xlab('sVGC')  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = c(0.925, 0.15)) + geom_smooth( method='lm', se= TRUE, fullrange = T, colour= 'black') +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_colour_manual(values=c('#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/ChangingGoals/figures/scatterplot_Large_Change_awareness.pdf', device = "pdf", width= 5, height =5)
+
+
+data$binarysVGCM2 = data$sVGC.Obs.M2 > 0.5
+data_plot= data %>% filter(LargeChange ==1) %>% group_by(MazeID_clean, Obs.No,binarysVGCM2, binarysVGCM1) %>% summarise(mean_awareness= mean(Aware.ReportObs.scaled))
+
+ggplot(data_plot, aes(x=binarysVGCM2, y= mean_awareness, fill= binarysVGCM2))+ geom_jitter(width=0.2, size=3,aes(colour= binarysVGCM2, fill= binarysVGCM2),  alpha = 0.3) + 
+  ggdist::stat_halfeye( alpha =0.5,
+    adjust = .3,          # smooth bandwidth adjustment
+    width = .6,           # width of the half-eye
+    .width = c(0.5, 0.95) # interval thickness for 50% and 95% limits
+  ) + theme_classic() + xlab("") +  ylab("awareness reports") + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = c(0.925, 0.15)) +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_colour_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~binarysVGCM1)
+  
+  ggsave('~/Documents/ChangingGoals/figures/boxplot_Large_Change_awareness_conditional_on_G1.pdf', device = "pdf", width= 5, height =5)
+
+
+
+```
+
+
+
+```{r possible goal locations sVGC model }
+
+
+data$priorsVGC.zscore= scale(as.numeric(data$VGC_prior))[,1]
+
+# first let us explore the mian effect of the Sperling effect 
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data[data$Conditions %in% c("no change"),])
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.M2.zscore, data[data$Conditions %in% c("no change"),])
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore , data[data$Conditions %in% c("no change"),])
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore + sVGC.Obs.M2.zscore, data[data$Conditions %in% c("no change"),])
+car::vif(lm3)
+
+sjPlot::tab_model(lm3)
+BIC(lm3) - BIC(lm1) # -125.0775
+# overall the prior model averaging over potential spatial locations does not out preform the original sVGC model 
+
+# Check if the possible goal effect is moderated by task conditions
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore*Conditions + sVGC.Obs.M2.zscore*Conditions, data[data$Conditions %in% c("no change", "small change"),])
+sjPlot::tab_model(lm3)
+
+# Check if the possible goal effect is moderated by task conditions
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore*Conditions + sVGC.Obs.M2.zscore*Conditions, data[data$Conditions %in% c("no change", "large change"),])
+sjPlot::tab_model(lm3)
+
+# first let us explore the mian effect of the Sperling effect 
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data[data$Execute==0,])
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore, data= data[data$Execute==0,])
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore+ priorsVGC.zscore , data= data[data$Execute==0,])
+
+sjPlot::tab_model(lm2)
+BIC(lm2) - BIC(lm1)  # -65.04728
+
+# first let us explore the mian effect of the Sperling effect 
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data[data$Execute==1,])
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore, data= data[data$Execute==1,])
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore+ priorsVGC.zscore , data= data[data$Execute==1,])
+
+sjPlot::tab_model(lm2)
+sjPlot::tab_model(lm1)
+BIC(lm2) - BIC(lm1)  # -0.11379
+
+
+```
+
+
+
+
+
+```{r compute sVGC effects }
+
+data$MazeID_clean= factor(data$MazeID)
+
+data$sVGC.Obs.M1.zscore= scale(data$sVGC.Obs.M1)[,1]
+data$sVGC.Obs.M2.zscore= scale(data$sVGC.Obs.M2)[,1]
+data$lat_dVGC_scaled= scale(data$lateralized_values_dVGC)[,1]
+data$lat_sVGC_scaled= scale(data$lateralized_values_sVGC)[,1]
+data$Aware.ReportObs.zscore = scale(data$Aware.ReportObs.scaled)[,1]
+
+# check sVGC model fits in control condition (i.e., no change)
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.M1.zscore, data[data$Conditions %in% c("no change"),])
+sjPlot::tab_model(lm1)
+
+# does inverting goal impact mental reps?
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "inversion"),])
+sjPlot::tab_model(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC040),data[data$Conditions %in% c("no change", "inversion"),])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget010),data[data$Conditions %in% c("no change", "inversion"),])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "small change"),])
+sjPlot::tab_model(lm2)
+
+lm2= lmer(scale(Aware.ReportObs)~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2)*ChangeVGC,data[data$Conditions %in% c("no change", "large change"),])
+sjPlot::tab_model(lm2)
+
+lm0= lmer(scale(Aware.ReportObs) ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2),data[data$Conditions %in% c("large change"),])
+sjPlot::tab_model(lm0)
+
+lm1= lmer(scale(Aware.ReportObs) ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M1) + scale(sVGC.Obs.M2),data[data$Conditions %in% c("large change"),])
+sjPlot::tab_model(lm1)
+
+BIC(lm1)-BIC(lm0) # 8.761689
+
+lm1= lmer(scale(Aware.ReportObs) ~  (1 | MazeID_clean) +  (1 | Subject.Code) +  scale(sVGC.Obs.M2) + scale(VGC_prior)*Conditions,data[data$Conditions %in% c("no change", "large change"),])
+sjPlot::tab_model(lm1)
+
+
+data$binarysVGCM1 = data$sVGC.Obs.M1 > 0.5
+# summarize by maze 
+data_plot= data %>% filter(LargeChange ==1) %>% group_by(MazeID_clean, Obs.No) %>% summarise(mean_awareness= mean(Aware.ReportObs.scaled), mean_sVGC= mean(sVGC.Obs.M1), mean_sVGCM2= mean(sVGC.Obs.M2),binarysVGCM1= mean(binarysVGCM1))
+
+data_plot$binarysVGCM1 = plyr::mapvalues(data_plot$binarysVGCM1, c(0,1), c('irrelevant', 'relevant'))
+
+ggplot(data_plot, aes(x=mean_sVGCM2, y= mean_awareness))+  geom_jitter(aes(color=binarysVGCM1, fill= binarysVGCM1), size=3, width = 0.05) + theme_classic() + xlab("") +  ylab("awareness reports") + xlab('sVGC')  + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = c(0.925, 0.15)) + geom_smooth( method='lm', se= TRUE, fullrange = T, colour= 'black') +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_colour_manual(values=c('#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/ChangingGoals/figures/scatterplot_Large_Change_awareness.pdf', device = "pdf", width= 5, height =5)
+
+
+
+# compute sparsity of each trial 
+data4reg = data %>% group_by(Subject.Code, Conditions, lat_sVGC_scaled, Trial.Number, MazeID_clean) %>% summarise(meanAware = mean(Aware.ReportObs.scaled), SDAware = sd(Aware.ReportObs.scaled))
+
+lm0= lmer(SDAware ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data4reg)
+lm1= lmer(SDAware ~  (1 | MazeID_clean) +  (1 | Subject.Code) + Execute, data= data4reg)
+lm2= lmer(SDAware ~  (1 | MazeID_clean) +  (1 | Subject.Code) + lat_sVGC_scaled + Execute, data= data4reg)
+lm3= lmer(SDAware ~  (1 | MazeID_clean) +  (1 | Subject.Code) +  lat_sVGC_scaled * Execute, data= data4reg)
+anova(lm0,lm1, lm2, lm3)
+sjPlot::tab_model(lm1)
+# 
+
+```
+
+
+
+```{r fit JIT model and other models }
+
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.M2), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm1)
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(JIT), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+# fit the spatial forgetting model predictions
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC010), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC025), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC033), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(SpatialsVGC040), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+# fit the random forgtting model predictions
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget010), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget025), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget033), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(RandomForget040), data[data$Conditions %in% c('no change', 'inversion'),])
+sjPlot::tab_model(lm3)
+BIC(lm3)
+
+
+
+```
+

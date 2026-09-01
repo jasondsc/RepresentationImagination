@@ -1,0 +1,1252 @@
+---
+title: "Stimulus Driven VGC"
+output: html_document
+date: "2025-05-22"
+---
+
+
+``` {r helpful functions and libraries}
+
+library(dplyr)
+library(ggplot2)
+# function that takes in json inputs and converts to matrix for simple math
+json2matrix <- function(mazeA){
+  m=t(matrix(unlist(strsplit(mazeA, split='')), nrow = 11))
+  return(m)
+}
+
+# function to compute manhattan distance between all pairs of obstacles 
+obstacle_distances <- function(mazeA){
+  number_obs= length(unique(as.numeric(mazeA)))-1
+  max_obs= max(as.numeric(mazeA), na.rm = TRUE)
+  min_obs= min(as.numeric(mazeA), na.rm = TRUE)
+  mazeA[mazeA=='G']=NaN
+  mazeA[mazeA=='S']=NaN
+  mazeA[mazeA=='.']=NaN
+  mazeA[mazeA=='#']=NaN
+  
+  obstacle_distances_output= matrix(, nrow=number_obs*number_obs, 3)
+  obstacle_distances_output[,1] = rep(seq(min_obs,max_obs), each=6)
+  obstacle_distances_output[,2] = rep(seq(min_obs,max_obs), 6)
+  
+  output=c()
+  for (i in min_obs:max_obs){
+    for (j in min_obs:max_obs){
+      obs1=which(mazeA== as.character(i))
+      obs1x= obs1 %% 11
+      obs1x[obs1x==0] =11
+      obs1y= ceiling(obs1/11)
+      obs2= which(mazeA== as.character(j))
+      obs2x= obs2 %% 11
+      obs2x[obs2x==0] =11
+      obs2y= ceiling(obs2/11)
+      
+      distance =c()
+      for (obsA in 1:length(obs1x)){
+        for (obsB in 1:length(obs2x)){
+          distance= c(distance, abs(obs1x[obsA]-obs2x[obsB]) + abs(obs1y[obsA]-obs2y[obsB]))
+        }
+      }
+      
+      output= c(output,min(distance))
+    }
+  }
+  obstacle_distances_output[,3]=output
+  return(obstacle_distances_output)
+}
+
+# load in libraries
+library(dplyr)
+library(lme4)
+library(ggplot2)
+
+```
+
+
+
+```{r read in behav data, clean it, & plot hist of aware reports}
+
+library(dplyr)
+library(ggplot2)
+data= read.csv('~/Documents/TaskVGCSperling/sperlingExp2/Exp2_allData.csv', na.strings = 'NaN')
+
+colnames(data)[1] = 'Subject.Code'
+data= data[!is.na(data$MazeID),]
+data$timedOut= data$Solution.RT > 20 # find trials where people took very long to answer
+
+tt=data %>% group_by(Subject.Code) %>% summarise(meanAge= mean(Age))
+
+MazeRTstats=data %>% group_by(MazeID, MazeSet) %>% summarise(meanRT= mean(Solution.RT), SDRT= sd(Solution.RT))
+
+temp=data %>% group_by(Subject.Code) %>% summarise(minAware= min(Aware.ReportObs), maxAware= max(Aware.ReportObs), sdAware= sd(Aware.ReportObs))
+# all subject seem to use the entirety of the scale
+
+maze_stats= read.csv('~/Documents/TaskVGCSperling/mazes/Sperling_mazes_stats.csv')
+maze_stats= maze_stats[order(maze_stats$grid),]
+
+temp=maze_stats %>% group_by(grid, side) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC), sumJIT= sum(JITprob))
+
+cor(maze_stats$dVGC, maze_stats$JITprob)
+cor(maze_stats$sVGC, maze_stats$JITprob)
+
+latmazes= data.frame(grid = unique(temp$grid),
+                     lat_dVGC =(temp$sumdVGC[temp$side=='L'] - temp$sumdVGC[temp$side=='R']) / (temp$sumdVGC[temp$side=='R'] + temp$sumdVGC[temp$side=='L']),
+                     lat_sVGC= (temp$sumsVGC[temp$side=='L'] - temp$sumsVGC[temp$side=='R']) / (temp$sumsVGC[temp$side=='R'] + temp$sumsVGC[temp$side=='L']),
+                     lat_JIT= (temp$sumJIT[temp$side=='L'] - temp$sumJIT[temp$side=='R']) / (temp$sumJIT[temp$side=='R'] + temp$sumJIT[temp$side=='L']))
+
+temp=maze_stats %>% group_by(grid, Quad) %>% summarise(sumdVGC= sum(dVGC), sumsVGC= sum(sVGC))
+
+horzlatmazes= data.frame(grid = unique(temp$grid),
+                         hlat_dVGC =abs((temp$sumdVGC[temp$Quad=='U'] - temp$sumdVGC[temp$Quad=='L']) / (temp$sumdVGC[temp$Quad=='U'] + temp$sumdVGC[temp$Quad=='L'])),
+                         hlat_sVGC= abs((temp$sumsVGC[temp$Quad=='U'] - temp$sumsVGC[temp$Quad=='L']) / (temp$sumsVGC[temp$Quad=='U'] + temp$sumsVGC[temp$Quad=='L'])))
+
+dictionary_of_maze=unique(paste(rep(c(1, 0), 6*12), as.numeric(substr(maze_stats$grid, 7,8))+1))
+
+cor(latmazes$lat_dVGC, latmazes$lat_sVGC)
+cor(latmazes$lat_dVGC, latmazes$lat_JIT)
+cor(latmazes$lat_JIT, latmazes$lat_sVGC)
+
+data$grid= data$CleanMazeID
+index_mazes=paste(data$MazeSet, data$grid)
+
+# add lateralization effects to main data frame
+data$lateralized_values_dVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_dVGC))
+data$lateralized_values_sVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_sVGC)))
+data$lateralized_values_JIT=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, abs(latmazes$lat_JIT)))
+data$lateralized_values_sVGC_signed=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, latmazes$lat_sVGC))
+data$lateralized_horz_dVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, horzlatmazes$hlat_dVGC))
+data$lateralized_horz_sVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, horzlatmazes$hlat_sVGC))
+
+
+# add nuissance covariates to data frame
+data$OptimalMoves=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Moves[seq(1, 144,6)]))
+
+
+
+index_mazes=paste(data$MazeSet, data$grid, data$Obs.No-1)
+dictionary_of_maze=paste(rep(rep(c(1, 0),each=6), 12), rep(rep(unique(as.numeric(substr(maze_stats$grid, 7,8))+1),each=6), each=2), stringr::str_sub(maze_stats$obstacle,5))
+data$side=plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$side)
+data$quad=plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$Quad)
+data$priorsVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPriors))
+data$goal_dist=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, 
+maze_stats$goal_dist))
+data$start_dist=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$start_dist))
+data$wall_dist=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$wall_dist))
+data$center_dist=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$center_dist))
+data$priorsVGC = as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$sVGCPriorNew))
+data$JIT=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITnew))
+data$PriorForget=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$TargetForgetsVGC))
+data$RandomForget=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC))
+
+data$RandomForget025=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC025))
+data$RandomForget033=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC033))
+data$RandomForget010=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC010))
+data$RandomForget040=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$RandomForgetsVGC040))
+
+data$SpatialsVGC=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC))
+data$SpatialsVGC010=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC010))
+data$SpatialsVGC025=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC025))
+data$SpatialsVGC033=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC033))
+data$SpatialsVGC040=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialsVGC040))
+
+data$JITRandom010=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITRandom010))
+data$JITRandom016=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITRandom016))
+data$JITRandom025=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITRandom025))
+data$JITRandom033=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITRandom033))
+data$JITRandom040=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$JITRandom040))
+
+
+data$SpatialJIT=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialJIT))
+data$SpatialJIT010=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialJIT010))
+data$SpatialJIT025=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialJIT025))
+data$SpatialJIT033=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialJIT033))
+data$SpatialJIT040=as.numeric(plyr::mapvalues(index_mazes, dictionary_of_maze, maze_stats$SpatialJIT040))
+
+# let use remove trials where people did not solve the maze in 20 seconds and where they deviated from the instructions (AKA did not have an optimal solution)
+
+# we remove trials where subjects took more than 9 extra moves 
+data$deltaMove=0
+data$deltaMove[data$Execute==1]= data$Moves[data$Execute==1]+1 - data$OptimalMoves[data$Execute==1]
+data$MovesBump[data$Execute==1]= data$AttemptedMoves[data$Execute==1]-data$Moves[data$Execute==1] # how many times did you bumps
+dataBAD= data # keep a copy for later
+data= data[data$Solution.RT < 20,]
+hist(data$deltaMove)
+
+data$SuboptimalMoves = data$deltaMove >9 # find index of trials where people deviated from optimality 
+# this is three sd from the mean
+
+data= data[data$deltaMove <10,]
+dataBAD= dataBAD[dataBAD$Solution.RT >= 20 | dataBAD$deltaMove >=10,]
+# how many trials left per subject
+test=data %>% group_by(Subject.Code) %>% summarise(count= n()/6) # total number trial
+test=data %>% group_by(Subject.Code) %>% summarise(count= n()/576) # percent kept
+
+subjects2Keep = test$Subject.Code[test$count >= 0.8]
+
+data= data[data$Subject.Code %in% subjects2Keep,]
+
+# maze 3 and 6 shows the smallest differences in performance 
+
+# one really bad subject
+# some in the 75% kept trials
+# most are above 80% !!
+
+#remap the awareness reports of each subject 
+data$Aware.ReportObs.scaled= plyr::mapvalues(data$Aware.ReportObs, c(1,2,3,4,5,6,7,8,9), c(0,0.125,0.25,0.375,0.5,0.625,0.75,0.875,1))
+data= data %>% group_by(Subject.Code) %>% mutate(Aware.ReportObs.zscore = (Aware.ReportObs.scaled- mean(Aware.ReportObs.scaled))/sd(Aware.ReportObs.scaled))
+
+# binarize the obstacles for plotting purpose to remake Figure 3a of Ho et al 
+data$binarysVGC= data$sVGC.Obs > 0.5
+data$binarysVGC= plyr::mapvalues(data$binarysVGC, c(1,0), c('relevant', 'irrelevant'))
+
+data$binaryJIT= data$JIT > 0.5
+data$binaryJIT= plyr::mapvalues(data$binaryJIT, c(TRUE,FALSE), c('relevant', 'irrelevant'))
+
+data4plot = data %>% group_by(Subject.Code, binarysVGC, Execute, MazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Execute= plyr::mapvalues(data4plot$Execute, c(1,0), c('2.execute plan', '1.plan only'))
+
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal.pdf', device = "pdf", width= 5, height =5)
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Execute)
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal_Execute.pdf', device = "pdf", width= 8, height =5)
+
+data4plot = data %>% group_by(Subject.Code, binaryJIT, Execute, MazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Execute= plyr::mapvalues(data4plot$Execute, c(1,0), c('2.execute plan', '1.plan only'))
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binaryJIT, color= binaryJIT, fill=binaryJIT, alpha=0.5)) +
+  geom_histogram(aes( color= binaryJIT, fill=binaryJIT, group= binaryJIT), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) 
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal_JIT.pdf', device = "pdf", width= 5, height =5)
+  
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binaryJIT, color= binaryJIT, fill=binaryJIT, alpha=0.5)) +
+  geom_histogram(aes( color= binaryJIT, fill=binaryJIT, group= binaryJIT), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") + scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~Execute)
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal_Execute_JIT.pdf', device = "pdf", width= 8, height =5)
+
+
+data$Lateralized.factor =data$lateralized_values_sVGC >0.5
+data4plot = data %>% group_by(Subject.Code, binarysVGC, Lateralized.factor, Execute, CleanMazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Execute= plyr::mapvalues(data4plot$Execute, c(1,0), c('2.execute plan', '1.plan only'))
+data4plot$Lateralized.factor= plyr::mapvalues(data4plot$Lateralized.factor, c(TRUE,FALSE), c('2.lateralized', '1.non-lateralized'))
+
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binarysVGC, color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  geom_histogram(aes( color= binarysVGC, fill=binarysVGC, group= binarysVGC), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~ Lateralized.factor , nrow=1)
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal_Lateralization.pdf', device = "pdf", width= 8, height =5)
+
+
+
+data$LateralizedJIT.factor =data$lateralized_values_JIT >0.5
+data4plot = data %>% group_by(Subject.Code, binaryJIT, LateralizedJIT.factor, Execute, CleanMazeID) %>% summarize(Aware.ReportObs.scaled = mean(Aware.ReportObs.scaled))
+
+data4plot$Lateralized.factor= plyr::mapvalues(data4plot$LateralizedJIT.factor, c(TRUE,FALSE), c('2.lateralized', '1.non-lateralized'))
+
+ggplot(data4plot, aes(Aware.ReportObs.scaled, group= binaryJIT, color= binaryJIT, fill=binaryJIT, alpha=0.5)) +
+  geom_histogram(aes( color= binaryJIT, fill=binaryJIT, group= binaryJIT), alpha= 0.5, bins = 9, position = 'identity') +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "awareness of obstacle", y = "count")  + ggpubr::theme_classic2() +
+  ggtitle("") +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~ Lateralized.factor , nrow=1)
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/JIT/Sperling_construal_Lateralization_JIT.pdf', device = "pdf", width= 8, height =5)
+
+
+```
+
+
+
+```{r compute VGC model }
+
+# standerdize all of the variables for running regression models
+data$MazeSet= factor(data$MazeSet)
+
+data$LateralizedText = plyr::mapvalues(data$MazeSet, c(0,1), c('-n', '-l'))
+data$gridText= plyr::mapvalues(data$grid, c(1:12), c('00', '01', '02', '03', '04', '05', '06', '07','08', '09', '10', '11'))
+
+# rename mazes so that it makes sense
+data$MazeID_clean= paste(data$gridText, data$LateralizedText, sep = '')
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$dVGC.Obs.zscore= scale(data$dVGC.Obs)[,1]
+data$priorsVGC.zscore= scale(as.numeric(data$priorsVGC))[,1]
+data$lat_sVGC_scaled= scale(data$lateralized_values_sVGC)[,1]
+
+data$Subject.Code=paste("S_", data$Subject.Code, sep= '')
+data$Subject.Code = factor(data$Subject.Code)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.zscore) , data= data[data$Execute ==0,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.zscore) , data= data[data$Execute ==1,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.zscore) , data= data)
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.zscore)*Execute , data= data)
+sjPlot::tab_model(lm2)
+BIC(lm2)
+# now let us compare the models with and without the Execution effect 
+BIC(lm2)- BIC(lm1) # 19.4788
+
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + scale(sVGC.Obs.zscore)*Execute*lat_sVGC_scaled , data= data)
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+```
+
+
+
+```{r priors over goal locations sVGC model }
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$priorsVGC.zscore= scale(as.numeric(data$priorsVGC))[,1]
+
+# first let us explore the mian effect of the Sperling effect 
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data)
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore, data= data)
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore , data= data)
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + priorsVGC.zscore + sVGC.Obs.zscore, data= data)
+anova(lm1, lm3)
+
+car::vif(lm3)
+
+sjPlot::tab_model(lm3)
+BIC(lm3) - BIC(lm1) # -125.0775
+# overall the prior model averaging over potential spatial locations does not out preform the original sVGC model 
+
+
+# let us see if this is true for both execute and plan only trials
+#plan only trials
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data[data$Execute==0,])
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore, data= data[data$Execute==0,])
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore+ priorsVGC.zscore , data= data[data$Execute==0,])
+
+sjPlot::tab_model(lm2)
+BIC(lm2) - BIC(lm1)  # -86.89758
+
+# how about navigation trials
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) , data= data[data$Execute==1,])
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore, data= data[data$Execute==1,])
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore+ priorsVGC.zscore , data= data[data$Execute==1,])
+
+sjPlot::tab_model(lm2)
+BIC(lm2) - BIC(lm1)  # -54.64675
+
+# is there a greater reliance on priors when you do not execute the plan
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore*Execute+ priorsVGC.zscore*Execute , data= data)
+sjPlot::tab_model(lm3)
+# NO there is no evidence for an interaction effect for the possible goal locations (i.e., prior)
+
+
+# now let us plot the effect
+data$priorsVGCBinary =as.numeric(data$priorsVGC) > 0.5
+
+# regress out effect of sVGC 
+dataReg= data[data$Execute==1,]
+
+data4plotting= dataReg %>% filter(Execute==1) %>% group_by(Subject.Code, Execute, MazeID_clean, priorsVGCBinary, binarysVGC) %>% summarise(Aware.ReportObs.zscore= mean(Aware.ReportObs.scaled), priorsVGC.zscore= mean(as.numeric(priorsVGC)), sVGC.Obs.zscore= mean(sVGC.Obs) )
+data4plotting$Execute = factor(data4plotting$Execute)
+data4plotting$priorsVGCBinary = plyr::mapvalues(data4plotting$priorsVGCBinary, c(TRUE, FALSE), c('p. relevant', 'p. irrelevant'))
+
+
+ggplot(data=data4plotting, aes(y= Aware.ReportObs.zscore, x =priorsVGCBinary, fill ='#F36A17' ))  +  geom_boxplot( outliers = FALSE, width=0.45)  + ggpubr::theme_classic2()+ ylab('awareness (scaled)') + xlab('') + scale_fill_manual(values ='#F36A17' ) + theme(legend.position = 'none') + facet_wrap(~ binarysVGC)
+
+ggsave('~/Documents/TaskVGCSperling/figure/Sperling_boxplot_awareness_Priors.pdf', device = "pdf", width= 5, height =5)
+
+
+data4plotting= data  %>% group_by(Execute, MazeID_clean, binarysVGC, Obs.No) %>% summarise(Aware.ReportObs.zscore= mean(Aware.ReportObs.scaled), priorsVGC.zscore= mean(as.numeric(priorsVGC)), sVGC.Obs.zscore= mean(sVGC.Obs) )
+data4plotting$Execute = factor(data4plotting$Execute)
+data4plotting$priorsVGCBinary = plyr::mapvalues(data4plotting$priorsVGCBinary, c(TRUE, FALSE), c('relevant', 'irrelevant'))
+
+
+ggplot(data4plotting, aes(x= priorsVGC.zscore, y=Aware.ReportObs.zscore)) + geom_point(aes(color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "sVGC model priors (z-scored)", y = "awareness (z-scored)")  + ggpubr::theme_classic2() + geom_smooth(aes(x= priorsVGC.zscore, y=Aware.ReportObs.zscore), method='lm', se= TRUE, fullrange = T) + 
+  ggtitle("") +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + facet_wrap(~ Execute, nrow=1) + theme(legend.position = 'none')
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/figures/Sperling_scatterplot_awareness_Priors22.pdf', device = "pdf", width= 10, height =5)
+
+
+ggplot(data4plotting, aes(x= priorsVGC.zscore, y=Aware.ReportObs.zscore)) + geom_point(aes(color= binarysVGC, fill=binarysVGC, alpha=0.5)) +
+  theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), legend.position = 'none') +
+  labs(x = "sVGC model priors (z-scored)", y = "awareness (z-scored)")  + ggpubr::theme_classic2() + geom_smooth(aes(x= priorsVGC.zscore, y=Aware.ReportObs.zscore), method='lm', se= TRUE, fullrange = T) + 
+  ggtitle("") +  scale_fill_manual(values=c('#afafaf', '#eb6234'))  + scale_color_manual(values=c('#afafaf', '#eb6234')) + theme(legend.position = 'none')
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/figures/Sperling_scatterplot_awareness_Priors222.pdf', device = "pdf", width= 5, height =5)
+
+
+```
+
+
+
+```{r nuissance covariates effect on awareness }
+
+data$center_dist_scaled= scale(data$center_dist)[,1]
+data$wall_dist_scaled= scale(data$wall_dist)[,1]
+data$start_dist_dVGC_scaled= scale(data$start_dist)[,1]
+data$goal_dist_sVGC_scaled= scale(data$goal_dist)[,1]
+
+# first let us explore the main effect of the Sperling effect 
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | CleanMazeID) +  (1 | Subject.Code) +  sVGC.Obs.zscore * Execute + goal_dist_sVGC_scaled +start_dist_dVGC_scaled + wall_dist_scaled + center_dist_scaled , data= data)
+sjPlot::tab_model(lm3)
+# none of the maze stats nuissance predicts awareness
+
+# now look at the threeway interaction effect 
+lm4= lmer(Aware.ReportObs.zscore ~  (1 | CleanMazeID) +  (1 | Subject.Code) +  sVGC.Obs.zscore * Execute*lat_sVGC_scaled + goal_dist_sVGC_scaled +start_dist_dVGC_scaled + wall_dist_scaled + center_dist_scaled, data= data)
+sjPlot::tab_model(lm4)
+
+```
+
+
+
+```{r Spatial context effects on awareness}
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$dVGC.Obs.zscore= scale(data$dVGC.Obs)[,1]
+
+
+data$Obs.No = data$Obs.No-1 # because of python
+
+# read in maze stats and the actual maze stimuli to compute nearest neighbours
+maze_stats= read.csv('~/Documents/TaskVGCSperling/mazes/Sperling_mazes_stats.csv')
+maze_stats=maze_stats[order(maze_stats$grid),]
+
+json_data <- rjson::fromJSON(file='~/Documents/TaskVGCSperling/mazes/mazes_NonlateralizedSperling.json')
+
+json_data2 <- rjson::fromJSON(file='~/Documents/TaskVGCSperling/mazes/mazes_LateralizedSperling.json')
+
+json_data <-append(json_data, json_data2)
+
+matrix_mazes=lapply(json_data, json2matrix)
+
+maze_stats_new= maze_stats
+
+# rank order obstacles in maze
+for (i in 1:length(json_data)){
+  
+  grid_name_temp= names(matrix_mazes)[i]
+  temp= obstacle_distances(matrix_mazes[[i]])
+  
+  count=1
+  rank_temp= matrix(, nrow = 6, ncol = 6)
+  distance= matrix(, nrow = 6, ncol = 6)
+  for(j in unique(temp[,1])){
+    obs_temp=temp[temp[,1]==j,]
+    obs_self=obs_temp[,1]==j & obs_temp[,2] ==j
+    # order by distance
+    rank_temp[count,] = order(obs_temp[,3])-1
+    distance[count,]= obs_temp[order(obs_temp[,3]),3]
+    count= count+1
+  }
+  
+  maze_stats_new[maze_stats_new$grid == grid_name_temp,12:17]=rank_temp
+  maze_stats_new[maze_stats_new$grid == grid_name_temp,18:23]=distance
+}
+
+
+#tester=data %>% complete(Sperling,MazeID_clean, Obs.No) %>% summarise(meanAwareness= mean(Aware.ReportObs.scaled))
+
+#maze_stats_new$AwarenessSperling= tester$meanAwareness[145:264]
+#maze_stats_new$AwarenessNoSperling= tester$meanAwareness[1:144]
+
+#write.csv(maze_stats_new, '~/Documents/ValueBasedConstrualTask/value-guided-construal-main/Lateralized_maze_Atten_model_pred.csv')
+
+# now replace rank order with awareness 
+index_mazes=paste(paste(data$gridText, data$LateralizedText, sep = ''), paste('obs-', data$Obs.No, sep = ''))
+dictionary_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), maze_stats_new$obstacle)
+
+tolist_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), paste('obs-', maze_stats_new[,13], sep=''))
+data$obs1=plyr::mapvalues(index_mazes, dictionary_of_maze, tolist_of_maze)
+
+tolist_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), paste('obs-', maze_stats_new[,14], sep=''))
+data$obs2=plyr::mapvalues(index_mazes, dictionary_of_maze, tolist_of_maze)
+
+tolist_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), paste('obs-', maze_stats_new[,15], sep=''))
+data$obs3=plyr::mapvalues(index_mazes, dictionary_of_maze, tolist_of_maze)
+
+tolist_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), paste('obs-', maze_stats_new[,16], sep=''))
+data$obs4=plyr::mapvalues(index_mazes, dictionary_of_maze, tolist_of_maze)
+
+tolist_of_maze= paste(stringr::str_remove(maze_stats_new$grid, 'grid-0'), paste('obs-', maze_stats_new[,17], sep=''))
+data$obs5=plyr::mapvalues(index_mazes, dictionary_of_maze, tolist_of_maze)
+
+
+toconvert_of_maze= paste(data$Subject.Code, data$Trial.Number, data$obs1)
+dictionary_of_maze= paste(data$Subject.Code, data$Trial.Number, index_mazes)
+tolist_of_maze= data$Aware.ReportObs.scaled
+data$Atten_obs1=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze)
+
+toconvert_of_maze= paste(data$Subject.Code, data$Trial.Number, data$obs2)
+dictionary_of_maze= paste(data$Subject.Code, data$Trial.Number, index_mazes)
+tolist_of_maze= data$Aware.ReportObs.scaled
+data$Atten_obs2=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze)
+
+toconvert_of_maze= paste(data$Subject.Code, data$Trial.Number, data$obs3)
+dictionary_of_maze= paste(data$Subject.Code, data$Trial.Number, index_mazes)
+tolist_of_maze= data$Aware.ReportObs.scaled
+data$Atten_obs3=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze)
+
+toconvert_of_maze= paste(data$Subject.Code, data$Trial.Number, data$obs4)
+dictionary_of_maze= paste(data$Subject.Code, data$Trial.Number, index_mazes)
+tolist_of_maze= data$Aware.ReportObs.scaled
+data$Atten_obs4=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze)
+
+toconvert_of_maze= paste(data$Subject.Code, data$Trial.Number, data$obs5)
+dictionary_of_maze= paste(data$Subject.Code, data$Trial.Number, index_mazes)
+tolist_of_maze= data$Aware.ReportObs.scaled
+data$Atten_obs5=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze)
+
+
+# z-score the columns (aka awarness for 1-6th rank)
+data$Atten_obs1Z= scale(as.numeric(data$Atten_obs1))[,1]
+data$Atten_obs2Z= scale(as.numeric(data$Atten_obs2))[,1]
+data$Atten_obs3Z= scale(as.numeric(data$Atten_obs3))[,1]
+data$Atten_obs4Z= scale(as.numeric(data$Atten_obs4))[,1]
+data$Atten_obs5Z= scale(as.numeric(data$Atten_obs5))[,1]
+data$attention_N_Z= scale(as.numeric(data$Aware.ReportObs.scaled))[,1]
+
+
+data$Lateralized=data$lateralized_values_sVGC > 0.5
+# run linear regression, predict awareness of obstacle from neighbours
+lm0= lmer(attention_N_Z ~  (1 | MazeID_clean)+ (1 | Subject.Code), data= data)
+lm1.1= lmer(attention_N_Z ~  (1 | MazeID_clean)+ (1 | Subject.Code) + Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z+ sVGC.Obs.zscore, data= data)
+lm1= lmer(attention_N_Z ~  (1 | MazeID_clean) + (1 | Subject.Code)+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= data)
+
+sjPlot::tab_model(lm1)
+sjPlot::tab_model(lm1.1)
+
+# it seems like the closest items are most weighted and furthest items are down weighting 
+
+# plot effects
+data4plot = summary(lm1)$coefficients
+data4plot= data4plot[-1,]
+colnames(data4plot)[2]= "Std.Error" 
+
+
+ggplot(data4plot, aes(x=1:5, y= Estimate, ymax= Estimate+ Std.Error, ymin= Estimate- Std.Error)) +  geom_hline(yintercept = 0, linetype= 'dashed', color= '#899499', size=1.25) + geom_point(size=4, color= '#E97D08') + geom_path(color= '#E97D08',size=1.25) + ggpubr::theme_classic2()  + geom_errorbar(fill= '#E97D08', color= '#E97D08', width=0, size=1.25)+ ylab('standerdized beta coeff') + xlab('ranked distance from obstacle') 
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/figures/ranked_distances_weights.pdf', device = "pdf", width= 5, height =5)
+
+
+
+lm1.2= lmer(attention_N_Z ~   (1 | Subject.Code)+ Atten_obs1Z*Execute + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= data)
+BIC(lm1.2)
+lm1= lmer(attention_N_Z ~   (1 | Subject.Code)+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= data)
+BIC(lm1)
+BIC(lm1)-BIC(lm1.2) # -17.90403
+
+# check if this effect holds if we do it for task relevant and irrelevant seperately
+dataLat= data[data$Execute==1 ,]
+
+lm0= lmer(attention_N_Z ~   (1 | Subject.Code), data= dataLat)
+lm1= lmer(attention_N_Z ~   (1 | Subject.Code)+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= dataLat)
+sjPlot::tab_model(lm1)
+
+
+dataNonLat= data[data$Execute==0 ,]
+
+lm0= lmer(attention_N_Z ~  (1 | MazeID_clean)+ (1 | Subject.Code), data= dataNonLat)
+lm2= lmer(attention_N_Z ~  (1 | MazeID_clean)+ (1 | Subject.Code)+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= dataNonLat)
+sjPlot::tab_model(lm2)
+
+
+data4plot = summary(lm1)$coefficients
+data4plot= data4plot[-1,]
+
+data4plot2 = summary(lm2)$coefficients
+data4plot2= data4plot2[-1,]
+data4plot=rbind(data4plot, data4plot2)
+colnames(data4plot)[2]= "Std.Error" 
+data4plot= as.data.frame(data4plot)
+data4plot$mazetype= rep(c('execute plan', 'plan only'), each= 5)
+data4plot$distance= 1:5
+
+ggplot(data4plot, aes(x=distance, y= Estimate, ymax= Estimate+ Std.Error, ymin= Estimate- Std.Error, colour = mazetype, fill= mazetype)) +  geom_hline(yintercept = 0, linetype= 'dashed', color= '#899499', size=1.25) + geom_point(size=4) + geom_path(size=1.25) + ggpubr::theme_classic2()  + geom_errorbar( width=0, size=1.25)+ ylab('standerdized beta coeff') + xlab('ranked distance from obstacle') + scale_colour_manual(values=c('#024A70', '#E97D08')) + scale_fill_manual(values=c('#024A70', '#E97D08')) + theme(legend.position = c(0.85,0.85))
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/figures/ranked_distances_SperlingEffect.pdf', device = "pdf", width= 5, height =5)
+
+```
+
+
+```{r Permutation test for spatial context effects }
+
+dataSperling= data[data$Sperling ==0,]
+dataSperling$Atten_obs1Z= scale(as.numeric(dataSperling$Atten_obs1))[,1]
+dataSperling$Atten_obs2Z= scale(as.numeric(dataSperling$Atten_obs2))[,1]
+dataSperling$Atten_obs3Z= scale(as.numeric(dataSperling$Atten_obs3))[,1]
+dataSperling$Atten_obs4Z= scale(as.numeric(dataSperling$Atten_obs4))[,1]
+dataSperling$Atten_obs5Z= scale(as.numeric(dataSperling$Atten_obs5))[,1]
+dataSperling$Aware.ReportObs.zscore= scale(as.numeric(dataSperling$Aware.ReportObs))[,1]
+dataSperling$sVGC.Obs.zscore= scale(as.numeric(dataSperling$sVGC.Obs))[,1]
+
+# please run previous module of spatial attention effects
+lm0= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean)+ (1 | Subject.Code), data= dataSperling)
+lm1.1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean)+ (1 | Subject.Code) + sVGC.Obs.zscore, data= dataSperling)
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) + (1 | Subject.Code) + sVGC.Obs.zscore+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= dataSperling)
+anova(lm0,lm1, lm1.1)
+sjPlot::tab_model(lm1)
+
+permuted_maze_states=maze_stats_new
+permuted_dictionary_of_mazes=dictionary_of_maze
+
+nperm=1000
+betacoeff1= array(, dim= nperm)
+betacoeff2= array(, dim= nperm)
+betacoeff3= array(, dim= nperm)
+betacoeff4= array(, dim= nperm)
+betacoeff5= array(, dim= nperm)
+
+obstacle_list= c('obs-0','obs-1', 'obs-2', 'obs-3', 'obs-4', 'obs-5')
+
+
+for (i in 1:nperm){
+
+  # randomize list of mazes in specific order
+  randsam=c(replicate(12, sample(1:6)))
+  rand_index=unlist(lapply(1:12, function(x) sample((6*(x-1))+(1:6))))
+  
+  dictionary_of_maze=paste(stringr::str_remove(permuted_maze_states$grid, 'grid-0'), permuted_maze_states$obstacle)
+  
+    tolist_of_maze=paste(stringr::str_remove(permuted_maze_states$grid, 'grid-0'), permuted_maze_states$obstacle[rand_index])
+  
+  dataSperling$permobs1=plyr::mapvalues(dataSperling$obs1, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+  dataSperling$permobs2=plyr::mapvalues(dataSperling$obs2, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+  dataSperling$permobs3=plyr::mapvalues(dataSperling$obs3, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+  dataSperling$permobs4=plyr::mapvalues(dataSperling$obs4, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+  dataSperling$permobs5=plyr::mapvalues(dataSperling$obs5, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+  
+  ## remove repeats of original so that the obstacle we are probing isnt in list of permuted items (no 'self-awareness' of obstacles)
+  
+  for (j in 1:dim(dataSperling)[1]){
+    
+    odd_one_out=setdiff(unlist(lapply(dataSperling$MazeID_clean[j], paste, obstacle_list)), c(as.matrix(dataSperling[j,70:74])))
+    
+    if(paste(dataSperling$MazeID_clean[j], ' obs-', dataSperling$Obs.No[j], sep= '') %in% c(as.matrix(data[j,70:74]))){
+      
+      index= which(c(as.matrix(dataSperling[j,70:74])) %in% paste(dataSperling$MazeID_clean[j], ' obs-', dataSperling$Obs.No[j], sep= '')) +69
+      
+      dataSperling[j,index]= odd_one_out
+    }
+  }
+  
+  
+    ###
+toconvert_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$permobs1)
+dictionary_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$MazeID_clean, paste('obs-', dataSperling$Obs.No, sep=''))
+tolist_of_maze= dataSperling$Aware.ReportObs.scaled
+
+  dataSperling$Atten_permobs1=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+
+toconvert_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$permobs2)
+dictionary_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$MazeID_clean, paste('obs-', dataSperling$Obs.No, sep=''))
+tolist_of_maze= dataSperling$Aware.ReportObs.scaled
+
+  dataSperling$Atten_permobs2=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+
+toconvert_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$permobs3)
+dictionary_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$MazeID_clean, paste('obs-', dataSperling$Obs.No, sep=''))
+tolist_of_maze= dataSperling$Aware.ReportObs.scaled
+
+  dataSperling$Atten_permobs3=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+
+toconvert_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$permobs4)
+dictionary_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$MazeID_clean, paste('obs-', dataSperling$Obs.No, sep=''))
+tolist_of_maze= dataSperling$Aware.ReportObs.scaled
+
+  dataSperling$Atten_permobs4=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+
+toconvert_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$permobs5)
+dictionary_of_maze= paste(dataSperling$Subject.Code, dataSperling$Trial.Number, dataSperling$MazeID_clean, paste('obs-', dataSperling$Obs.No, sep=''))
+tolist_of_maze= dataSperling$Aware.ReportObs.scaled
+
+dataSperling$Atten_permobs5=plyr::mapvalues(toconvert_of_maze, dictionary_of_maze, tolist_of_maze, warn_missing = FALSE)
+
+  
+  dataSperling$Atten_permobs1Z= scale(as.numeric(dataSperling$Atten_permobs1))[,1]
+  dataSperling$Atten_permobs2Z= scale(as.numeric(dataSperling$Atten_permobs2))[,1]
+  dataSperling$Atten_permobs3Z= scale(as.numeric(dataSperling$Atten_permobs3))[,1]
+  dataSperling$Atten_permobs4Z= scale(as.numeric(dataSperling$Atten_permobs4))[,1]
+  dataSperling$Atten_permobs5Z= scale(as.numeric(dataSperling$Atten_permobs5))[,1]
+
+
+lm_perm= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) + (1 | Subject.Code) + sVGC.Obs.zscore+ Atten_permobs1Z + Atten_permobs2Z + Atten_permobs3Z + Atten_permobs4Z + Atten_permobs5Z, data= dataSperling)
+
+betacoeff1[i]= summary(lm_perm)$coefficients[3,1]
+betacoeff2[i]= summary(lm_perm)$coefficients[4,1]
+betacoeff3[i]= summary(lm_perm)$coefficients[5,1]
+betacoeff4[i]= summary(lm_perm)$coefficients[6,1]
+betacoeff5[i]= summary(lm_perm)$coefficients[7,1]
+
+if ((i %% 100) ==0){
+  print(i)
+}
+
+}
+
+mean(betacoeff1)
+sd(betacoeff1)
+
+permuted_betas=data.frame(beta = c(betacoeff1, betacoeff2, betacoeff3, betacoeff4, betacoeff5),
+           rank = rep(1:5, each=1000),
+           permutaion= rep(1:1000,5))
+
+permuted_slopes= c()
+for (i in 1:nperm){
+  
+  lmperm= lm(beta ~ rank, data= permuted_betas[permuted_betas$permutaion==i,])
+  permuted_slopes[i]=lmperm$coefficients[2]
+}
+
+# now get the value of the true slope 
+obs_betas=data.frame(beta = c(summary(lm1)$coefficients[3,1], summary(lm1)$coefficients[4,1], summary(lm1)$coefficients[5,1], summary(lm1)$coefficients[6,1], summary(lm1)$coefficients[7,1]),
+           rank = 1:5,
+           permutaion= 1)
+lmobs= lm(beta ~ rank, data= obs_betas)
+
+(sum(lmobs$coefficients[2] >permuted_slopes) +1 ) / (nperm +1)
+# 0.000999001
+# permuted p val
+
+# just get the values for the online task 
+dataOrig= data[data$Sperling ==0,]
+dataOrig$Atten_obs1Z= scale(as.numeric(dataOrig$Atten_obs1))[,1]
+dataOrig$Atten_obs2Z= scale(as.numeric(dataOrig$Atten_obs2))[,1]
+dataOrig$Atten_obs3Z= scale(as.numeric(dataOrig$Atten_obs3))[,1]
+dataOrig$Atten_obs4Z= scale(as.numeric(dataOrig$Atten_obs4))[,1]
+dataOrig$Atten_obs5Z= scale(as.numeric(dataOrig$Atten_obs5))[,1]
+dataOrig$Aware.ReportObs.zscore= scale(as.numeric(dataOrig$Aware.ReportObs))[,1]
+dataOrig$sVGC.Obs.zscore= scale(as.numeric(dataOrig$sVGC.Obs))[,1]
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) + (1 | Subject.Code) + sVGC.Obs.zscore+ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z , data= dataOrig)
+
+
+data4plot = summary(lm1)$coefficients
+data4plot= data4plot[-1,]
+data4plot= data4plot[-1,]
+
+data4plot2 = summary(lm2)$coefficients
+data4plot2= data4plot2[-1,]
+data4plot2= data4plot2[-1,]
+data4plot=rbind(data4plot, data4plot2, data4plot2)
+
+data4plot[11:15,1] =c(mean(betacoeff1), mean(betacoeff2), mean(betacoeff3), mean(betacoeff4), mean(betacoeff5))
+
+data4plot[11:15,2] =c(sd(betacoeff1)/ sqrt(1000), sd(betacoeff2)/ sqrt(1000), sd(betacoeff3)/ sqrt(1000), sd(betacoeff4)/ sqrt(1000), sd(betacoeff5)/ sqrt(1000))
+
+data4plot= as.data.frame(data4plot)
+colnames(data4plot)[2] = 'Std.Error'
+data4plot$mazetype= rep(c('online', 'offline', 'null offline'), each= 5)
+data4plot$distance= 1:5
+
+ggplot(data4plot, aes(x=distance, y= Estimate, ymax= Estimate+ Std.Error, ymin= Estimate- Std.Error, colour = mazetype, fill= mazetype)) +  geom_hline(yintercept = 0, linetype= 'dashed', color= '#899499', size=1.25) + geom_point(size=4) + geom_path(size=1.25) + ggpubr::theme_classic2()  + geom_errorbar( width=0, size=1.25)+ ylab('standerdized beta coeff') + xlab('ranked distance from obstacle') + scale_fill_manual(values=c('#899499', '#024A70', '#E97D08')) + scale_color_manual(values=c('#899499', '#024A70', '#E97D08')) 
+
+ggsave('~/Documents/TaskVGCSperling/figure/R_plot_ranked_distances_weights_by_maze_type_null.pdf', device = "pdf", width= 7, height =5)
+
+
+
+```
+
+
+
+```{r Individual diff of distance effects on awareness}
+
+# Note run previous section and then run this one!
+# here we look at how distance impacts awareness PER PARTICIPANT
+coeff_orig_subj= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+coeff_orig_lower= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+coeff_orig_upper= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+count=1
+subjkeep=c()
+for (subji in unique(data$Subject.Code)) {
+  
+  datatemp= data[data$Subject.Code == subji & data$Execute==0,]
+  
+  if(sd(datatemp$Aware.ReportObs.scaled) !=0){
+
+    # select out participant data and z-score within person! 
+    subjkeep= c(subjkeep, subji)
+    datatemp$Atten_obs1Z= scale(as.numeric(datatemp$Atten_obs1))[,1]
+    datatemp$Atten_obs2Z= scale(as.numeric(datatemp$Atten_obs2))[,1]
+    datatemp$Atten_obs3Z= scale(as.numeric(datatemp$Atten_obs3))[,1]
+    datatemp$Atten_obs4Z= scale(as.numeric(datatemp$Atten_obs4))[,1]
+    datatemp$Atten_obs5Z= scale(as.numeric(datatemp$Atten_obs5))[,1]
+    datatemp$attention_N_Z= scale(as.numeric(datatemp$Aware.ReportObs.scaled))[,1]
+
+  # fit linear model per peron and save corresponding outputs in matrix 
+  lm1= lm(attention_N_Z ~ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z, data= datatemp)
+  
+  coeff_orig_subj[count,]= summary(lm1)$coefficients[,1]
+  coeff_orig_lower[count,]= confint(lm1)[,1]
+  coeff_orig_upper[count,]= confint(lm1)[,2]
+  count= count+1
+  }
+
+}
+
+coeff_orig_subj= coeff_orig_subj[!is.na(coeff_orig_subj[,1]),]
+coeff_orig_lower= coeff_orig_lower[!is.na(coeff_orig_lower[,1]),]
+coeff_orig_upper= coeff_orig_upper[!is.na(coeff_orig_upper[,1]),]
+
+# rinse and repeat for execution trials
+# # # # # # # # # # # # # # # # # # # # #
+coeff_sperling_subj= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+coeff_sperling_lower= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+coeff_sperling_upper= matrix(, nrow = length(unique(data$Subject.Code)), ncol = 6)
+count=1
+subjkeep=c()
+for (subji in unique(data$Subject.Code)) {
+  
+  datatemp= data[data$Subject.Code == subji & data$Execute==1,]
+  
+  if(sd(datatemp$Aware.ReportObs.scaled) !=0){
+
+    # select out participant data and z-score within person! 
+    subjkeep= c(subjkeep, subji)
+    datatemp$Atten_obs1Z= scale(as.numeric(datatemp$Atten_obs1))[,1]
+    datatemp$Atten_obs2Z= scale(as.numeric(datatemp$Atten_obs2))[,1]
+    datatemp$Atten_obs3Z= scale(as.numeric(datatemp$Atten_obs3))[,1]
+    datatemp$Atten_obs4Z= scale(as.numeric(datatemp$Atten_obs4))[,1]
+    datatemp$Atten_obs5Z= scale(as.numeric(datatemp$Atten_obs5))[,1]
+    datatemp$attention_N_Z= scale(as.numeric(datatemp$Aware.ReportObs.scaled))[,1]
+
+  # fit linear model per peron and save corresponding outputs in matrix 
+  lm1= lm(attention_N_Z ~ Atten_obs1Z + Atten_obs2Z + Atten_obs3Z + Atten_obs4Z + Atten_obs5Z, data= datatemp)
+  
+  coeff_sperling_subj[count,]= summary(lm1)$coefficients[,1]
+  coeff_sperling_lower[count,]= confint(lm1)[,1]
+  coeff_sperling_upper[count,]= confint(lm1)[,2]
+  count= count+1
+  }
+
+}
+
+coeff_sperling_subj= coeff_sperling_subj[!is.na(coeff_sperling_subj[,1]),]
+coeff_sperling_lower= coeff_sperling_lower[!is.na(coeff_sperling_lower[,1]),]
+coeff_sperling_upper= coeff_sperling_upper[!is.na(coeff_sperling_upper[,1]),]
+
+
+data4plot= stack(as.data.frame(coeff_orig_subj[,-1]))
+data4plot$ind = plyr::mapvalues(data4plot$ind, c('V1','V2', 'V3', 'V4', 'V5'), 1:5)
+
+data4plot$subID = rep(subjkeep, 5)
+# outlier subject with very large beta effects (more tnan twice the largest effect)
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# plot all participants betas (spatial effects)
+ggplot(data=data4plot, aes(y= values, x =ind, fill ='#024A70', colour = '#024A70', group= subID)) + geom_hline(yintercept = 0, linetype= 'dashed', color= '#899499', size=1.25)  + geom_path(size=0.7,alpha=0.3, linetype= 'solid', color= '#033A70', fill= '#033A70',position = jitter_pos)  + geom_point(size=3,alpha=0.3,colour = '#024A70',position = jitter_pos)+ ggpubr::theme_classic2()+ ylab('standerdized beta coeff') + xlab('ranked distance from obstacle') + scale_fill_manual(values ='#024A70' ) +  scale_colour_manual(values ='#024A70' )+  theme(legend.position = 'none') + coord_cartesian(ylim = c(-0.6, 0.6))
+
+ggsave('~/Documents/TaskVGCSperling/figure/Experiment1_SpatialAttention_individual_line_plot.pdf', device = "pdf", width= 7, height =5)
+
+
+data4plot= stack(as.data.frame(coeff_sperling_subj[,-1]))
+data4plot$ind = plyr::mapvalues(data4plot$ind, c('V1','V2', 'V3', 'V4', 'V5'), 1:5)
+
+data4plot$subID = rep(subjkeep, 5)
+# outlier subject with very large beta effects (more tnan twice the largest effect)
+jitter_pos=position_jitter(width = .1, height = 0, seed = 1)
+
+# plot all participants betas (spatial effects)
+ggplot(data=data4plot, aes(y= values, x =ind, fill ='#F36A17', colour = '#F36A17', group= subID)) + geom_hline(yintercept = 0, linetype= 'dashed', color= '#899499', size=1.25)  + geom_path(size=0.7,alpha=0.3, linetype= 'solid', color= '#CA6F07', fill= '#CA6F07',position = jitter_pos)  + geom_point(size=3,alpha=0.3,colour = '#F36A17',position = jitter_pos)+ ggpubr::theme_classic2()+ ylab('standerdized beta coeff') + xlab('ranked distance from obstacle') + scale_fill_manual(values ='#F36A17' ) +  scale_colour_manual(values ='#F36A17' )+  theme(legend.position = 'none') + coord_cartesian(ylim = c(-0.6, 0.6))
+
+ggsave('~/Documents/TaskVGCSperling/figure/Experiment_1SpatialAttention_individual_line_plotSperling_effect.pdf', device = "pdf", width= 7, height =5)
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # #
+# How do differences in attention effect relate to task performance?
+# relate magnitude of beta effect with sparsity of representation
+# # # # # # # # # # # # # # # # # # # # # # # # # #
+slopes_orig=c()
+data4plot= stack(as.data.frame(coeff_orig_subj[,-1]))
+data4plot$ind = plyr::mapvalues(data4plot$ind, c('V1','V2', 'V3', 'V4', 'V5'), 1:5)
+data4plot$subID = rep(subjkeep, 5)
+count=1
+for (subji in sort(unique(data4plot$subID))) {
+  
+  datatemp= data4plot[data4plot$subID == subji,]
+  datatemp$ind = as.integer(datatemp$ind)
+  
+  lm1= lm(values ~ ind, data= datatemp)
+  slopes_orig[count] = summary(lm1)$coefficients[2,1]
+  count=count+1
+
+}
+
+
+slopes_sperling=c()
+data4plot= stack(as.data.frame(coeff_sperling_subj[,-1]))
+data4plot$ind = plyr::mapvalues(data4plot$ind, c('V1','V2', 'V3', 'V4', 'V5'), 1:5)
+data4plot$subID = rep(subjkeep, 5)
+count=1
+for (subji in sort(unique(data4plot$subID))) {
+
+  datatemp= data4plot[data4plot$subID == subji,]
+  datatemp$ind = as.integer(datatemp$ind)
+  
+  lm1= lm(values ~ ind, data= datatemp)
+  slopes_sperling[count] = summary(lm1)$coefficients[2,1]
+  count=count+1
+
+}
+
+cor.test(slopes_sperling, slopes_orig, method = 'spearman')
+# correlated Spearman rho of 0.7446051  S = 1148, p-value = 5.216e-06
+
+data4plotting= data.frame(slopes_orig= slopes_orig, slopes_sperling= slopes_sperling)
+
+ggplot(data4plotting, aes(x=slopes_orig, y= slopes_sperling, color='1', fill= '1')) +  geom_point(size=2) + theme_classic() + xlab("Original attention effect") +  ylab("Sperling attention effect") + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.title.x = element_text(size=14), axis.text.y = element_text(size=14)) + geom_smooth(method='lm', se= TRUE, fullrange = T) + scale_fill_manual(values=c('#afafaf')) + scale_color_manual(values=c('#afafaf')) + theme(legend.position = 'none')
+
+ggsave('~/Documents/TaskVGCSperling/figure/Experiment1_SpatialAttention_interindividual_effects_across_conditions.pdf', device = "pdf", width= 5, height =5)
+
+
+```
+
+
+
+```{r Consistency of representation}
+#compute consistency across Condition for the same maze and obstacle 
+consistency <- data %>% 
+  group_by(Subject.Code, MazeID_clean, Obs.No, Execute) %>% 
+  summarise(awareness_scaled = mean(Aware.ReportObs.scaled, na.rm = TRUE), .groups = "drop") %>% 
+  tidyr::pivot_wider(
+    names_from = Execute,
+    values_from = awareness_scaled
+  ) %>%
+  tidyr::drop_na(`0`, `1`)
+
+#correlations between condition but within participant
+correlations <- consistency %>%
+  group_by(Subject.Code) %>%
+  summarise(spearman_rho = cor(`0`, `1`, method = "spearman"), pearson_r = cor(`0`, `1`, method = "pearson"), .groups = "drop") 
+
+psych::describe(correlations$spearman_rho[correlations$spearman_rho>0])
+
+#spearman's rho
+ggplot(correlations, aes(x = spearman_rho)) +
+  geom_histogram(binwidth = 0.05, fill = "#CF6677", color = "black", boundary = 0) +
+  geom_vline(aes(xintercept = median(correlations$spearman_rho)), 
+             color = "red", linetype = "dashed") +
+  labs(
+    x = "Spearman's Rho (between Tasks)",
+    y = "Count of Participants"
+  ) +
+  ggpubr::theme_classic2()+
+  theme(
+    axis.text.x = element_text(size = 14),     # Tick labels on x-axis
+    axis.text.y = element_text(size = 14),     # Tick labels on y-axis
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14)
+  )
+
+ggsave('~/Documents/TaskVGCSperling/sperlingExp2/figures/Experiment_1_Consistency_inrepresentation_across_Task.pdf', device = "pdf", width= 5, height =5)
+
+
+```
+
+
+```{r Individual diff of Lateralization}
+
+
+# remove subjects who do not have all mazes completed
+library(tidyr)
+datatibble=tibble(data)
+# get a list of all possible combinations of subj and maze
+all <- datatibble %>% expand(Subject.Code, side, MazeID_clean)
+
+# group together data by variables into one nice neat dataframe per condition
+lateralization_maze_Execute<-datatibble %>% filter(Execute==1) %>% 
+  group_by(Subject.Code,side, Execute, MazeID_clean) %>%
+  summarise(AwarenessOrig = mean(Aware.ReportObs.scaled)) %>%
+  select(-Subject.Code)
+
+lateralization_maze<-datatibble %>% filter(Execute==0) %>% 
+  group_by(Subject.Code,side, Execute, MazeID_clean) %>%
+  summarise(AwarenessOrig = mean(Aware.ReportObs.scaled)) %>%
+  select(-Subject.Code)
+
+
+# make sure you fill in the blanks with NAs
+lateralization_maze=lateralization_maze %>% dplyr::right_join(all)
+lateralization_maze_Execute=lateralization_maze_Execute %>% dplyr::right_join(all)
+
+# Reorder the dataframe so that the two match 
+lateralization_maze=lateralization_maze[order(lateralization_maze$Subject.Code, lateralization_maze$MazeID_clean, decreasing = FALSE),]
+lateralization_maze_Execute=lateralization_maze_Execute[order(lateralization_maze_Execute$Subject.Code, lateralization_maze_Execute$MazeID_clean, decreasing = FALSE),]
+
+# compute lateralization index
+
+ALI_original=lateralization_maze$AwarenessOrig[seq(2, dim(lateralization_maze)[1],2)]-lateralization_maze$AwarenessOrig[seq(1, dim(lateralization_maze)[1],2)] / (lateralization_maze$AwarenessOrig[seq(2, dim(lateralization_maze)[1],2)]+lateralization_maze$AwarenessOrig[seq(1, dim(lateralization_maze)[1],2)])
+
+ALI_Execute=lateralization_maze_Execute$AwarenessOrig[seq(2, dim(lateralization_maze_Execute)[1],2)]-lateralization_maze_Execute$AwarenessOrig[seq(1, dim(lateralization_maze_Execute)[1],2)] / (lateralization_maze_Execute$AwarenessOrig[seq(2, dim(lateralization_maze_Execute)[1],2)]+lateralization_maze_Execute$AwarenessOrig[seq(1, dim(lateralization_maze_Execute)[1],2)])
+
+
+data4plotting=data.frame(ALI= c(abs(ALI_original), abs(ALI_Execute)), 
+           Task = rep(c('plan only', 'execute'), each=length(ALI_Execute)),
+           subjectCode= lateralization_maze_Execute$Subject.Code[seq(1, dim(lateralization_maze_Execute)[1],2)],
+           mazeID= lateralization_maze_Execute$MazeID_clean[seq(1, dim(lateralization_maze_Execute)[1],2)])
+
+data4plotting$lateralizationMaze=stringr::str_sub(data4plotting$mazeID,4)
+
+sample1=data4plotting$ALI[data4plotting$Task == 'plan only' & data4plotting$lateralizationMaze == 'n']
+sample2=data4plotting$ALI[data4plotting$Task == 'plan only' & data4plotting$lateralizationMaze == 'l']
+RVAideMemoire::perm.t.test(sample1, sample2)
+# t = -2.1997, p-value = 0.044
+# mean of sample1 mean of sample2 
+#      0.3680635       0.4112839 
+# In the original experiment participants do not lateralize their awareness more 
+# in one condition,  they do it naturally, it seems like a general strategy to solve the maze
+# a heuristic 
+
+
+dataSubjects = data4plotting %>% group_by(subjectCode, Task, lateralizationMaze) %>% summarise(mean_lat= mean(ALI, na.rm= TRUE))
+
+# individual diff in lateralization 
+cor.test(dataSubjects$mean_lat[dataSubjects$Task == 'plan only' & dataSubjects$lateralizationMaze == 'n'], dataSubjects$mean_lat[dataSubjects$Task == 'execute' & dataSubjects$lateralizationMaze == 'n'],method = 'spearman')
+# t = 3.8101, df = 17, p-value = 0.0014 corr 0.8260289 
+
+cor.test(dataSubjects$mean_lat[dataSubjects$Task == 'plan only' & dataSubjects$lateralizationMaze == 'l'], dataSubjects$mean_lat[dataSubjects$Task == 'execute' & dataSubjects$lateralizationMaze == 'l'],method = 'spearman')
+# t = 3.7519, df = 17, p-value = 0.001588 corr 0.840267 
+
+cor.test(dataSubjects$mean_lat[dataSubjects$Task == 'plan only' & dataSubjects$lateralizationMaze == 'n'], dataSubjects$mean_lat[dataSubjects$Task == 'execute' & dataSubjects$lateralizationMaze == 'l'])
+# t = 9.8774, df = 17, p-value = 1.263e-10 corr 0.8814789 
+
+cor.test(dataSubjects$mean_lat[dataSubjects$Task == 'plan only' & dataSubjects$lateralizationMaze == 'l'], dataSubjects$mean_lat[dataSubjects$Task == 'execute' & dataSubjects$lateralizationMaze == 'n'])
+# t = 6.8604, df = 17, p-value = 1.869e-07 corr 0.7918288 
+
+
+
+data4plotting= data.frame(slopes_orig= dataSubjects$mean_lat[dataSubjects$Task == 'execute'], 
+                          slopes_sperling= dataSubjects$mean_lat[dataSubjects$Task == 'plan only'],
+                          shape=dataSubjects$lateralizationMaze[dataSubjects$Task == 'plan only'])
+
+cor.test(dataSubjects$mean_lat[dataSubjects$Task == 'plan only' ], dataSubjects$mean_lat[dataSubjects$Task == 'execute' ])
+# t = 13.459, df = 36, p-value = < 2.2e-16; corr 0.8703284 
+
+ggplot(data4plotting, aes(x=slopes_orig, y= slopes_sperling, color=shape, fill= shape)) + geom_abline(slope=1, intercept=0, linetype= 'dashed', colour= '#899499', size= 1.6, alpha=0.5)+ geom_point(aes(shape = shape),size=3) + theme_classic() + xlab("Original lateralization effect") +  ylab("Sperling lateralization effect") + theme(axis.text.x = element_text(size=14), axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), axis.title.x = element_text(size=14)) + geom_smooth( aes( x=slopes_orig, y= slopes_sperling, color=shape, fill= shape, group= shape), method='lm', se= TRUE, fullrange = T) + scale_fill_manual(values=c('#D69B0D', '#4A0270')) + scale_color_manual(values=c('#D69B0D', '#4A0270')) + theme(legend.position = 'none')
+
+ggsave('~/Documents/TaskVGCSperling/figure/Experiment_1_Consistency_of_lateralization_effect.pdf', device = "pdf", width= 5, height =5)
+
+
+```
+
+```{r compute JIT model }
+
+# standerdize all of the variables for running regression models
+data$MazeSet= factor(data$MazeSet)
+
+data$LateralizedText = plyr::mapvalues(data$MazeSet, c(0,1), c('-n', '-l'))
+data$gridText= plyr::mapvalues(data$grid, c(1:12), c('00', '01', '02', '03', '04', '05', '06', '07','08', '09', '10', '11'))
+
+# rename mazes so that it makes sense
+data$MazeID_clean= paste(data$gridText, data$LateralizedText, sep = '')
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$dVGC.Obs.zscore= scale(data$dVGC.Obs)[,1]
+data$JIT.zscore= scale(data$JIT)[,1]
+
+data$Subject.Code = factor(data$Subject.Code)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data)
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + JIT.zscore , data= data)
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore + priorsVGC.zscore , data= data)
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + JIT.zscore, data= data)
+sjPlot::tab_model(lm2)
+
+```
+
+
+```{r compute Random Forget model }
+
+# standerdize all of the variables for running regression models
+data$MazeSet= factor(data$MazeSet)
+
+data$LateralizedText = plyr::mapvalues(data$MazeSet, c(0,1), c('-n', '-l'))
+data$gridText= plyr::mapvalues(data$grid, c(1:12), c('00', '01', '02', '03', '04', '05', '06', '07','08', '09', '10', '11'))
+
+# rename mazes so that it makes sense
+data$MazeID_clean= paste(data$gridText, data$LateralizedText, sep = '')
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$dVGC.Obs.zscore= scale(data$dVGC.Obs)[,1]
+data$RandomForget.zscore= scale(data$RandomForget)[,1]
+
+data$RandomForget025.zscore= scale(data$RandomForget025)[,1]
+data$RandomForget033.zscore= scale(data$RandomForget033)[,1]
+data$RandomForget010.zscore= scale(data$RandomForget010)[,1]
+data$RandomForget040.zscore= scale(data$RandomForget040)[,1]
+
+data$JITRandom010.zscore= scale(data$JITRandom010)[,1]
+data$JITRandom016.zscore= scale(data$JITRandom016)[,1]
+data$JITRandom025.zscore= scale(data$JITRandom025)[,1]
+data$JITRandom033.zscore= scale(data$JITRandom033)[,1]
+data$JITRandom040.zscore= scale(data$JITRandom040)[,1]
+
+data$Subject.Code = factor(data$Subject.Code)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data)
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+# check how random model predictions fit the data
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget.zscore , data= data)
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+# repeat for execute and non execute trials 
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget.zscore , data= data[data$Execute==0,])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data[data$Execute==0,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+BIC(lm1)-BIC(lm2) # 15.24127
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget.zscore , data= data[data$Execute==1,])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data[data$Execute==1,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+BIC(lm1)-BIC(lm2) # 20.6101
+
+
+# now let us rinse and repeat for various values of p forget in the random forget model
+lm1.1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget010.zscore , data= data)
+sjPlot::tab_model(lm1.1)
+BIC(lm1.1)
+
+lm1.2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget025.zscore , data= data)
+sjPlot::tab_model(lm1.2)
+BIC(lm1.2)
+
+lm1.3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget033.zscore , data= data)
+sjPlot::tab_model(lm1.3)
+BIC(lm1.3)
+
+lm1.4= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + RandomForget040.zscore , data= data)
+sjPlot::tab_model(lm1.4)
+BIC(lm1.4)
+
+```
+
+
+
+```{r compute Spatial Forget model }
+
+# standerdize all of the variables for running regression models
+data$MazeSet= factor(data$MazeSet)
+
+data$LateralizedText = plyr::mapvalues(data$MazeSet, c(0,1), c('-n', '-l'))
+data$gridText= plyr::mapvalues(data$grid, c(1:12), c('00', '01', '02', '03', '04', '05', '06', '07','08', '09', '10', '11'))
+
+# rename mazes so that it makes sense
+data$MazeID_clean= paste(data$gridText, data$LateralizedText, sep = '')
+
+data$sVGC.Obs.zscore= scale(data$sVGC.Obs)[,1]
+data$dVGC.Obs.zscore= scale(data$dVGC.Obs)[,1]
+data$SpatialsVGC.zscore= scale(data$SpatialsVGC)[,1]
+
+data$SpatialsVGC025.zscore= scale(data$SpatialsVGC025)[,1]
+data$SpatialsVGC033.zscore= scale(data$SpatialsVGC033)[,1]
+data$SpatialsVGC010.zscore= scale(data$SpatialsVGC010)[,1]
+data$SpatialsVGCt040.zscore= scale(data$SpatialsVGC040)[,1]
+
+data$SpatialJIT010.zscore= scale(data$SpatialJIT010)[,1]
+data$SpatialJIT.zscore= scale(data$SpatialJIT)[,1]
+data$SpatialJIT025.zscore= scale(data$SpatialJIT025)[,1]
+data$SpatialJIT033.zscore= scale(data$SpatialJIT033)[,1]
+data$SpatialJIT040.zscore= scale(data$SpatialJIT040)[,1]
+
+data$Subject.Code = factor(data$Subject.Code)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data)
+sjPlot::tab_model(lm1)
+BIC(lm1)
+
+# check how random model predictions fit the data
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC.zscore , data= data)
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+# repeat for execute and non execute trials 
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC.zscore , data= data[data$Execute==0,])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data[data$Execute==0,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+BIC(lm1)-BIC(lm2) # 22.6065
+
+lm2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC.zscore , data= data[data$Execute==1,])
+sjPlot::tab_model(lm2)
+BIC(lm2)
+
+lm1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + sVGC.Obs.zscore , data= data[data$Execute==1,])
+sjPlot::tab_model(lm1)
+BIC(lm1)
+BIC(lm1)-BIC(lm2) # 26.76673
+
+
+lm3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC.zscore*Execute , data= data)
+sjPlot::tab_model(lm3)
+
+# now let us rinse and repeat for various values of p forget in the random forget model
+lm1.1= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC010.zscore , data= data)
+sjPlot::tab_model(lm1.1)
+BIC(lm1.1)
+
+lm1.2= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC025.zscore , data= data)
+sjPlot::tab_model(lm1.2)
+BIC(lm1.2)
+
+lm1.3= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC033.zscore , data= data)
+sjPlot::tab_model(lm1.3)
+BIC(lm1.3)
+
+lm1.4= lmer(Aware.ReportObs.zscore ~  (1 | MazeID_clean) +  (1 | Subject.Code) + SpatialsVGC040.zscore , data= data)
+sjPlot::tab_model(lm1.4)
+BIC(lm1.4)
+
+```
+
+
