@@ -1,5 +1,7 @@
 # RepresentationImagination
-Studying how people build mental representations in imagination for planning.
+### Studying how people build mental representations in imagination for planning.
+
+Humans have an impressive ability to efficiently plan, making use of limited cognitive resources. Planning has been described as a value-guided process, whereby people construct simplified mental representations to aid in planning. This model has been tested exclusively in situations of external planning, where individuals plan over the visual scene in front of them. Whether planning untethered to perception, based on their imagination, follows the same value-guided process has yet to be explored. In the present paper, the authors demonstrate that value-guided computations similarly explain internal planning. People can flexibly update their plans; Yet there is a cost to drastically updating one’s mental representation of the current goal to pursue a new goal. The authors use computational modelling to show that individuals’ internal plans are impacted by spatial context and imprecision. Together, our work bridges the fields of attention, planning, and computational modelling to shed new light on how our mental representations inform our ability to plan based on our imaginations.
 
 ## Description:
 This GitHub contains:
